@@ -330,7 +330,11 @@ export class BlazorDebugConfigurationProvider implements vscode.DebugConfigurati
         const useVSDbg = await BlazorDebugConfigurationProvider.useVSDbg(projectPath);
         let portBrowserDebug = -1;
         if (useVSDbg) {
-            const managedDebugConfiguration = await this.createManagedDebugConfigurationOnBrowser(configuration, url);
+            const managedDebugConfiguration = await this.createManagedDebugConfigurationOnBrowser(
+                configuration,
+                url,
+                projectPath
+            );
             inspectUri = managedDebugConfiguration.inspectUri;
             portBrowserDebug = managedDebugConfiguration.portBrowserDebug;
             try {
@@ -471,29 +475,39 @@ export class BlazorDebugConfigurationProvider implements vscode.DebugConfigurati
 
     private async createManagedDebugConfigurationOnBrowser(
         configuration: vscode.DebugConfiguration,
-        url: string
+        url: string,
+        projectPath: string
     ): Promise<{ app: vscode.DebugConfiguration; inspectUri: string; portBrowserDebug: number }> {
+        const useCoreClr = await BlazorDebugConfigurationProvider.isCoreClrRuntime(projectPath);
         const [inspectUriRet, portICorDebug, portBrowserDebug] =
-            await BlazorDebugConfigurationProvider.launchVsWebAssemblyBridge(configuration.url || url);
+            await BlazorDebugConfigurationProvider.launchVsWebAssemblyBridge(configuration.url || url, useCoreClr);
 
         const cwd = configuration.cwd || '${workspaceFolder}';
         const args = configuration.hosted ? [] : ['run'];
         const app: vscode.DebugConfiguration = {
             name: MANAGED_DEBUG_NAME,
-            type: 'monovsdbg_wasm',
+            type: useCoreClr ? 'coreclr_wasm' : 'monovsdbg_wasm',
             request: 'launch',
+            // TODO: temporary - remove before merging. Connects to a locally running
+            // Concord debug adapter (debugServer) instead of spawning the packaged one.
+            debugServer: 4711,
             args,
             cwd,
             cascadeTerminateToConfigurations: [ONLY_JS_DEBUG_NAME, SERVER_APP_NAME, JS_DEBUG_NAME],
             ...configuration.dotNetConfig,
         };
 
-        app.monoDebuggerOptions = {
+        const debuggerOptions = {
             ip: '127.0.0.1',
             port: portICorDebug,
-            platform: 'browser',
+            platform: useCoreClr ? 'browser;x64' : 'browser',
             isServer: true,
         };
+        if (useCoreClr) {
+            app.coreClrMobileDebuggerOptions = debuggerOptions;
+        } else {
+            app.monoDebuggerOptions = debuggerOptions;
+        }
 
         this.logger.info(
             `[DEBUGGER] Blazor managed debug configuration: ${BlazorDebugConfigurationProvider.stringifyDebugConfiguration(
@@ -546,7 +560,10 @@ export class BlazorDebugConfigurationProvider implements vscode.DebugConfigurati
         return process.platform === 'win32' ? 'dotnet.exe' : 'dotnet';
     }
 
-    private static async launchVsWebAssemblyBridge(urlStr: string): Promise<[string, number, number]> {
+    private static async launchVsWebAssemblyBridge(
+        urlStr: string,
+        useCoreClr: boolean
+    ): Promise<[string, number, number]> {
         const dotnetPath = await BlazorDebugConfigurationProvider.acquireDotnetPath();
         const devToolsUrl = `http://localhost:0`; // Browser debugging port address
         const spawnedProxyArgs = [
@@ -555,6 +572,8 @@ export class BlazorDebugConfigurationProvider implements vscode.DebugConfigurati
             `${devToolsUrl}`,
             '--UseVsDbg',
             'true',
+            '--UseCoreClr',
+            useCoreClr ? 'true' : 'false',
             '--iCorDebugPort',
             '-1',
             '--OwnerPid',
@@ -724,6 +743,40 @@ export class BlazorDebugConfigurationProvider implements vscode.DebugConfigurati
         return false;
     }
 
+    /**
+     * Determines whether the WASM project is configured to use the CoreCLR runtime
+     * instead of the default Mono runtime. This is true when the project explicitly
+     * opts in via `<UseCoreCLR>true</UseCoreCLR>`, or opts out of Mono via
+     * `<UseMonoRuntime>false</UseMonoRuntime>` (the property currently used to switch
+     * browser-wasm projects to the CoreCLR runtime).
+     */
+    public static async isCoreClrRuntime(projectPath: string): Promise<boolean> {
+        const csprojFiles = await BlazorDebugConfigurationProvider.findCsprojFiles(projectPath);
+        for (const csproj of csprojFiles) {
+            if (BlazorDebugConfigurationProvider.usesCoreClrRuntime(csproj)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static usesCoreClrRuntime(csprojPath: string): boolean {
+        try {
+            const content = readFileSync(csprojPath, 'utf-8');
+            const useCoreClrMatch = content.match(/<UseCoreCLR>\s*(.*?)\s*<\/UseCoreCLR>/i);
+            if (useCoreClrMatch !== null) {
+                return useCoreClrMatch[1].trim().toLowerCase() === 'true';
+            }
+            const useMonoRuntimeMatch = content.match(/<UseMonoRuntime>\s*(.*?)\s*<\/UseMonoRuntime>/i);
+            if (useMonoRuntimeMatch !== null) {
+                return useMonoRuntimeMatch[1].trim().toLowerCase() === 'false';
+            }
+            return false;
+        } catch {
+            return false;
+        }
+    }
+
     private static async findCsprojFiles(projectPath: string): Promise<string[]> {
         if (projectPath === '') {
             const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -769,17 +822,24 @@ export class BlazorDebugConfigurationProvider implements vscode.DebugConfigurati
         return [];
     }
     private static async useVSDbg(projectPath: string): Promise<boolean> {
+        const existWebAssemblyWebBridge = existsSync(BlazorDebugConfigurationProvider.getWebAssemblyWebBridgePath());
+        if (!existWebAssemblyWebBridge) {
+            return false;
+        }
+
+        // CoreCLR-based WASM projects have no Mono debugging path, so the VsWebAssemblyBridge
+        // must always be used for them, regardless of the `wasm.debug.useVSDbg` setting or TFM.
+        if (await BlazorDebugConfigurationProvider.isCoreClrRuntime(projectPath)) {
+            return true;
+        }
+
         const wasmConfig = vscode.workspace.getConfiguration('csharp');
         const useVSDbg = wasmConfig.get<boolean>('wasm.debug.useVSDbg') == true;
         if (!useVSDbg) {
             return false;
         }
-        const existWebAssemblyWebBridge = existsSync(BlazorDebugConfigurationProvider.getWebAssemblyWebBridgePath());
-        let isNet9OrNewer = false;
-        if (existWebAssemblyWebBridge) {
-            isNet9OrNewer = await BlazorDebugConfigurationProvider.isNet9OrNewer(projectPath);
-        }
-        return useVSDbg && existWebAssemblyWebBridge && isNet9OrNewer;
+        const isNet9OrNewer = await BlazorDebugConfigurationProvider.isNet9OrNewer(projectPath);
+        return useVSDbg && isNet9OrNewer;
     }
 
     private static getWebAssemblyWebBridgePath() {
@@ -801,8 +861,9 @@ export class BlazorDebugConfigurationProvider implements vscode.DebugConfigurati
         const useVSDbg = await BlazorDebugConfigurationProvider.useVSDbg(projectPath);
 
         if (useVSDbg) {
+            const useCoreClr = await BlazorDebugConfigurationProvider.isCoreClrRuntime(projectPath);
             const [inspectUri, portICorDebug, portBrowserDebug] =
-                await BlazorDebugConfigurationProvider.launchVsWebAssemblyBridge(urlStr);
+                await BlazorDebugConfigurationProvider.launchVsWebAssemblyBridge(urlStr, useCoreClr);
 
             return [inspectUri, portICorDebug, portBrowserDebug];
         }
@@ -810,6 +871,10 @@ export class BlazorDebugConfigurationProvider implements vscode.DebugConfigurati
     }
 
     public static async determineBrowserType(): Promise<string | undefined> {
+        // TODO: temporarily force Chrome for local testing/repro; revert before merge.
+        return BlazorDebugConfigurationProvider.chromeBrowserType;
+
+        // eslint-disable-next-line no-unreachable
         // There was no browser specified by the user, so we will do some auto-detection to find a browser,
         // favoring Edge if multiple valid options are installed.
         const edgeBrowserFinder = new EdgeBrowserFinder(process.env, promises);
