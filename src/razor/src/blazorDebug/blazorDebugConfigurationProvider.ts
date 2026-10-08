@@ -337,25 +337,33 @@ export class BlazorDebugConfigurationProvider implements vscode.DebugConfigurati
             );
             inspectUri = managedDebugConfiguration.inspectUri;
             portBrowserDebug = managedDebugConfiguration.portBrowserDebug;
-            try {
-                this.logger.info(
-                    `[DEBUGGER] Starting Blazor managed debug configuration: ${BlazorDebugConfigurationProvider.stringifyDebugConfiguration(
-                        managedDebugConfiguration.app
-                    )}`
-                );
-                const didStart = await this.vscodeType.debug.startDebugging(folder, managedDebugConfiguration.app);
-                if (!didStart) {
-                    this.logger.warn(
-                        `[DEBUGGER] Blazor managed debug configuration did not start: ${BlazorDebugConfigurationProvider.stringifyDebugConfiguration(
+            const startManagedDebugging = async () => {
+                try {
+                    this.logger.info(
+                        `[DEBUGGER] Starting Blazor managed debug configuration: ${BlazorDebugConfigurationProvider.stringifyDebugConfiguration(
                             managedDebugConfiguration.app
                         )}`
                     );
+                    const didStart = await this.vscodeType.debug.startDebugging(folder, managedDebugConfiguration.app);
+                    if (!didStart) {
+                        this.logger.warn(
+                            `[DEBUGGER] Blazor managed debug configuration did not start: ${BlazorDebugConfigurationProvider.stringifyDebugConfiguration(
+                                managedDebugConfiguration.app
+                            )}`
+                        );
+                    }
+                } catch (error) {
+                    this.logger.error(
+                        '[DEBUGGER] Error when launching Blazor managed debug configuration: ',
+                        error as Error
+                    );
                 }
-            } catch (error) {
-                this.logger.error(
-                    '[DEBUGGER] Error when launching Blazor managed debug configuration: ',
-                    error as Error
-                );
+            };
+
+            if (managedDebugConfiguration.app.type === 'coreclr_wasm') {
+                void startManagedDebugging();
+            } else {
+                await startManagedDebugging();
             }
         }
 
@@ -505,6 +513,14 @@ export class BlazorDebugConfigurationProvider implements vscode.DebugConfigurati
         };
         if (useCoreClr) {
             app.coreClrMobileDebuggerOptions = debuggerOptions;
+            if (typeof app.program === 'string') {
+                const symbolOptions = app.symbolOptions ?? {};
+                const searchPaths = symbolOptions.searchPaths ?? [];
+                app.symbolOptions = {
+                    ...symbolOptions,
+                    searchPaths: [...searchPaths, path.dirname(app.program)],
+                };
+            }
         } else {
             app.monoDebuggerOptions = debuggerOptions;
         }
