@@ -6,10 +6,10 @@ The canonical private build/source guide lives in the access-restricted [interna
 
 ## Build and prerequisites
 
-Use [Thays's existing prototype branch](https://github.com/thaystg/vscode-csharp/tree/dev/thays/wasm_coreclr_debugger), which contains the maintained tools and extension fixes. No separate extension source patch is required. Pin the exact published commit recorded by the canonical guide instead of assuming this moving branch or another component's branch is a compatible cohort. The original extension source base was `31d0dfdc149c205b54c6f76c52beb52e6cd670c8`; it is historical provenance, not the current reproduction checkout.
+Use the [published integration branch in Steve's fork](https://github.com/steveisok/vscode-csharp/tree/steveisok-wasm-debugger-prototype), which contains the maintained tools and extension fixes. No separate extension source patch is required. Pin the exact published commit recorded by the canonical guide instead of assuming this moving branch or another component's branch is a compatible cohort. This branch preserves Thays's prototype ancestry from `dev/thays/wasm_coreclr_debugger` at `31d0dfdc149c205b54c6f76c52beb52e6cd670c8`; that base is historical provenance, not the current reproduction checkout. The integration changes are published separately for coordination with Thays rather than implying they have landed in her fork.
 
 ```sh
-git clone --branch dev/thays/wasm_coreclr_debugger https://github.com/thaystg/vscode-csharp.git
+git clone --branch steveisok-wasm-debugger-prototype https://github.com/steveisok/vscode-csharp.git
 cd vscode-csharp
 git rev-parse HEAD
 ```
