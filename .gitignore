@@ -2,6 +2,11 @@ bin
 obj
 node_modules
 out
+# Short alias for the isolated VS Code profile's macOS Unix sockets.
+/u
+/v
+/p/
+tasks/debugger/prototype/*.local.json
 .roslyn/
 .roslynDevKit/
 .xamlTools/

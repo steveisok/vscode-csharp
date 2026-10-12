@@ -1,0 +1,34 @@
+{
+    "schemaVersion": 1,
+    "extensionRoot": "../../..",
+    "artifactRoot": "${extensionRoot}/out/prototype-runs",
+    "profileRoot": "${extensionRoot}/p",
+    "manifest": "./artifact-cohort.local.json",
+    "allowUnvalidatedHost": false,
+    "browserType": "edge",
+    "paths": {
+        "runtimeRoot": "../runtime",
+        "havitRoot": "../macro-benchmarks",
+        "runtimePack": "${runtimeRoot}/artifacts/matching-interpreted-runtime-pack",
+        "concordPublish": "../Concord/artifacts/matching-host-publish",
+        "proxyPublish": "../internal-components/artifacts/matching-host-publish",
+        "nativeAssets": "${runtimeRoot}/artifacts/matching-universal-dac-dbi",
+        "smallWebRoot": "${runtimeRoot}/artifacts/matching-small-wwwroot",
+        "havitWebRoot": "${havitRoot}/artifacts/matching-url-helper/publish/wwwroot",
+        "smallHandoff": "${runtimeRoot}/artifacts/small-handoff.json",
+        "havitHandoff": "${havitRoot}/artifacts/url-helper-handoff.json",
+        "havitServerModule": "${havitRoot}/bench.mjs",
+        "extensionDependencies": "${extensionRoot}/out/local-dependency-extensions"
+    },
+    "executables": {
+        "vscode": "${home}/tools/vscode/native-executable",
+        "browser": "${home}/tools/edge/native-executable",
+        "dotnet": "${home}/tools/dotnet/dotnet",
+        "dotnetServe": "${home}/tools/dotnet-serve"
+    },
+    "ports": { "small": 8000, "havit": 8001, "dap": 4711, "ui": 9335 },
+    "sourceMaps": {
+        "small": { "${runtimeRoot}": "${runtimeRoot}" },
+        "havit": { "${havitRoot}": "${havitRoot}" }
+    }
+}

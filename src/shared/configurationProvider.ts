@@ -157,8 +157,8 @@ export class BaseVsDbgConfigurationProvider implements vscode.DebugConfiguration
         }
         if (
             (debugConfiguration.type === 'monovsdbg_wasm' || debugConfiguration.type === 'coreclr_wasm') &&
-            (debugConfiguration.monoDebuggerOptions?.platform === 'browser' ||
-                debugConfiguration.coreClrMobileDebuggerOptions?.platform === 'browser') &&
+            (debugConfiguration.monoDebuggerOptions?.platform?.split(';').includes('browser') ||
+                debugConfiguration.coreClrMobileDebuggerOptions?.platform?.split(';').includes('browser')) &&
             this.isDotnetWorkspaceConfigurationProvider()
         ) {
             if (debugConfiguration.type === 'monovsdbg_wasm') {
@@ -167,7 +167,10 @@ export class BaseVsDbgConfigurationProvider implements vscode.DebugConfiguration
                     debugConfiguration.type = 'coreclr_wasm';
                     debugConfiguration.coreClrMobileDebuggerOptions = debugConfiguration.monoDebuggerOptions;
                     delete debugConfiguration.monoDebuggerOptions;
-                    debugConfiguration.coreClrMobileDebuggerOptions.platform = `${debugConfiguration.coreClrMobileDebuggerOptions.platform};x64`;
+                    const platform = debugConfiguration.coreClrMobileDebuggerOptions.platform;
+                    if (!platform.split(';').includes('x64')) {
+                        debugConfiguration.coreClrMobileDebuggerOptions.platform = `${platform};x64`;
+                    }
                 }
             }
 

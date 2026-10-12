@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { promises, readFileSync, existsSync } from 'fs';
+import { promises, readFileSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
 import * as vscode from 'vscode';
@@ -512,7 +512,10 @@ export class BlazorDebugConfigurationProvider implements vscode.DebugConfigurati
             isServer: true,
         };
         if (useCoreClr) {
-            app.coreClrMobileDebuggerOptions = debuggerOptions;
+            app.coreClrMobileDebuggerOptions = {
+                ...app.coreClrMobileDebuggerOptions,
+                ...debuggerOptions,
+            };
             if (typeof app.program === 'string') {
                 const symbolOptions = app.symbolOptions ?? {};
                 const searchPaths = symbolOptions.searchPaths ?? [];
@@ -539,6 +542,13 @@ export class BlazorDebugConfigurationProvider implements vscode.DebugConfigurati
      * falling back to the global dotnet if the extension is unavailable.
      */
     private static async acquireDotnetPath(): Promise<string> {
+        const prototypeDotnet = process.env.VSCODE_CSHARP_WASMDBG_DOTNET;
+        if (prototypeDotnet !== undefined) {
+            if (!path.isAbsolute(prototypeDotnet) || !statSync(prototypeDotnet).isFile()) {
+                throw new Error('Configured prototype dotnet must be an existing absolute native executable path.');
+            }
+            return prototypeDotnet;
+        }
         const findPathRequest: IDotnetFindPathContext = {
             acquireContext: {
                 version: DotNetRuntimeVersion,
@@ -596,12 +606,15 @@ export class BlazorDebugConfigurationProvider implements vscode.DebugConfigurati
             `${process.pid}`,
         ];
         const cpOptions: cp.SpawnOptionsWithoutStdio = {
-            detached: true,
+            detached: process.env.VSCODE_CSHARP_WASMDBG_DOTNET === undefined,
             windowsHide: true,
             env: {
                 ...process.env,
                 DOTNET_ROOT: path.dirname(dotnetPath),
                 DOTNET_MULTILEVEL_LOOKUP: '0',
+                ...(process.env.VSCODE_CSHARP_WASMDBG_ARTIFACT_DIR
+                    ? { WASMDBG_ARTIFACT_DIR: process.env.VSCODE_CSHARP_WASMDBG_ARTIFACT_DIR }
+                    : {}),
             },
         };
         let chunksProcessed = 0;

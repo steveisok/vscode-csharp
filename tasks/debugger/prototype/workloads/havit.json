@@ -1,0 +1,27 @@
+{
+    "id": "havit",
+    "scenario": "url-helper-primitive",
+    "workspace": "havit",
+    "handoff": "havit/runtime-handoff.json",
+    "assembly": "Havit.Blazor.Documentation",
+    "url": "http://127.0.0.1:8001/components/HxGrid",
+    "profile": "fully-interpreted-debugger",
+    "comparisonCaveat": "Synchronous URL helper with primitive url/hashIndex, not richer async filtering or ordinary mixed/R2R parity.",
+    "entry": {
+        "selector": ".on-this-page-navigation.side-page-navigation a[href$=\"#header-filtering\"]",
+        "action": "click",
+        "expectedHrefSuffix": "#header-filtering",
+        "expectedText": "Filtering from headers",
+        "minimumViewportWidth": 992,
+        "historyRoundTrip": true,
+        "readyMarker": "havitStartup"
+    },
+    "preparationTransitions": 2,
+    "stops": [
+        { "sourceSuffix": "UrlHelper.cs", "line": 15, "localNames": ["url"] },
+        { "sourceSuffix": "UrlHelper.cs", "line": 16, "localNames": ["url"] },
+        { "sourceSuffix": "UrlHelper.cs", "line": 18, "localNames": ["url"] },
+        { "sourceSuffix": "UrlHelper.cs", "line": 19, "localNames": ["url", "hashIndex"] },
+        { "sourceSuffix": "UrlHelper.cs", "line": 20, "localNames": ["url", "hashIndex"] }
+    ]
+}
