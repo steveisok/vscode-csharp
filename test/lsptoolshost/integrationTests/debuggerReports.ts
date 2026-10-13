@@ -5,7 +5,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 
 export type ReportMode = 'steps' | 'entry' | 'capability';
 export type ReportStatus = 'incomplete' | 'passed' | 'failed';
@@ -163,6 +163,41 @@ export function timingDistributions(samples: TimingSample[]) {
     );
 }
 
+export function summarizeObservedRuns<Sample extends TimingSample & { runId: string }>(
+    reports: Pick<ReportMetadata, 'runId' | 'status'>[],
+    observedSamples: Sample[],
+    mode: ReportMode,
+    requestedRuns: number
+) {
+    const acceptedRunIds = reports.filter((report) => report.status === 'passed').map((report) => report.runId);
+    const acceptedSamples = observedSamples.filter((sample) => acceptedRunIds.includes(sample.runId));
+    const excludedSamples = observedSamples.filter((sample) => !acceptedRunIds.includes(sample.runId));
+    const status: ReportStatus = reports.some((report) => report.status === 'failed')
+        ? 'failed'
+        : acceptedRunIds.length === requestedRuns
+          ? 'passed'
+          : 'incomplete';
+    const acceptedDistributions =
+        mode === 'steps' && acceptedSamples.length ? timingDistributions(acceptedSamples) : {};
+    return {
+        status,
+        attemptedRuns: reports.length,
+        completedRuns: acceptedRunIds.length,
+        completedSteps: acceptedSamples.length,
+        observedSteps: observedSamples.length,
+        excludedSteps: excludedSamples.length,
+        acceptedRunIds,
+        excludedRunIds: reports.filter((report) => report.status !== 'passed').map((report) => report.runId),
+        samples: acceptedSamples,
+        observedSamples,
+        excludedSamples,
+        acceptedDistributions,
+        distributionStatus:
+            mode !== 'steps' ? 'untimed' : status === 'passed' ? 'complete' : 'partial accepted runs only',
+        distributions: status === 'passed' ? acceptedDistributions : {},
+    };
+}
+
 function timingTable(distributions: ReturnType<typeof timingDistributions>): string {
     return [
         '| Measurement (ms) | n | Minimum | Median | Maximum |',
@@ -245,18 +280,87 @@ export function evidenceLinks(directory: string): ReportMetadata['links'] {
             (entry) =>
                 entry.name !== 'report-metadata.json' &&
                 entry.name !== 'README.md' &&
-                (!entry.isDirectory() || ['user-data', 'proxy-logs'].includes(entry.name)) &&
+                (!entry.isDirectory() ||
+                    ['user-data', 'proxy-logs', 'vscode-logs', 'provenance'].includes(entry.name)) &&
                 (entry.isDirectory() || /\.(json|png|log|txt)$/.test(entry.name))
         )
         .map((entry) => ({
-            label: entry.name === 'user-data' ? 'VS Code and js-debug raw logs' : entry.name,
+            label: ['user-data', 'vscode-logs'].includes(entry.name) ? 'VS Code and js-debug raw logs' : entry.name,
             path:
                 entry.name === 'user-data'
                     ? 'user-data/logs/'
                     : entry.name === 'proxy-logs'
                       ? 'proxy-logs/'
-                      : encodeURIComponent(entry.name),
+                      : entry.isDirectory()
+                        ? `${encodeURIComponent(entry.name)}/`
+                        : encodeURIComponent(entry.name),
         }));
+}
+
+export function bundlePrivateProfileLogs(directory: string, profile: string | undefined) {
+    const receiptFile = path.join(directory, 'log-retention.json');
+    const receipt: {
+        status: 'absent' | 'copied' | 'failed';
+        source?: string;
+        destination: string;
+        reason?: string;
+        files: { path: string; size: number; sha256: string }[];
+    } = { status: 'absent', source: profile && path.join(profile, 'logs'), destination: 'vscode-logs', files: [] };
+    function inventory(root: string, relative = ''): typeof receipt.files {
+        return fs
+            .readdirSync(path.join(root, relative), { withFileTypes: true })
+            .flatMap((entry) => {
+                const name = path.join(relative, entry.name);
+                if (entry.isDirectory()) {
+                    return inventory(root, name);
+                }
+                if (!entry.isFile()) {
+                    throw new Error(`Private log inventory requires regular files: ${name}`);
+                }
+                const file = path.join(root, name);
+                return [
+                    {
+                        path: name.split(path.sep).join('/'),
+                        size: fs.statSync(file).size,
+                        sha256: createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
+                    },
+                ];
+            })
+            .sort((a, b) => a.path.localeCompare(b.path));
+    }
+    try {
+        if (!receipt.source || !fs.existsSync(receipt.source)) {
+            receipt.reason = profile
+                ? 'The owned profile produced no logs directory.'
+                : 'No private profile was allocated.';
+        } else {
+            const original = inventory(receipt.source);
+            if (!original.length) {
+                receipt.reason = 'The owned profile produced no log files.';
+            } else {
+                const target = path.join(directory, receipt.destination);
+                if (fs.existsSync(target)) {
+                    throw new Error('Bundled logs already exist; do not overwrite retained evidence.');
+                }
+                fs.cpSync(receipt.source, target, { recursive: true, errorOnExist: true, force: false });
+                const copied = inventory(target);
+                if (JSON.stringify(copied) !== JSON.stringify(original)) {
+                    throw new Error('Bundled private log file set/hash mismatch.');
+                }
+                receipt.files = copied;
+                receipt.status = 'copied';
+            }
+        }
+        fs.writeFileSync(receiptFile, JSON.stringify(receipt, null, 2), { flag: 'wx' });
+        return receipt;
+    } catch (error) {
+        receipt.status = 'failed';
+        receipt.reason = String(error);
+        if (!fs.existsSync(receiptFile)) {
+            fs.writeFileSync(receiptFile, JSON.stringify(receipt, null, 2), { flag: 'wx' });
+        }
+        throw error;
+    }
 }
 
 export function hasMatchingCapability(

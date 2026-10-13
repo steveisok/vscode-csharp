@@ -107,6 +107,26 @@ describe('Browser debug configuration', () => {
         }
         return managed;
     }
+    test('Havit baseline trace reaches the browser configuration without enabling proxy protocol trace', async () => {
+        const provider = new BlazorDebugConfigurationProvider(logger, vscode);
+        const browser = await provider.resolveDebugConfiguration(undefined, {
+            name: 'Havit URL helper',
+            type: 'blazorwasm',
+            request: 'attach',
+            projectPath: path.join(workspacePath, 'App.csproj'),
+            cwd: workspacePath,
+            browser: 'edge',
+            url: 'http://127.0.0.1:8001/components/HxGrid',
+            trace: true,
+            browserConfig: { runtimeExecutable: '/explicit/edge' },
+            dotNetConfig: { program, coreClrMobileDebuggerOptions: { assetsPath } },
+        });
+        expect(browser?.type).toBe('msedge');
+        expect(browser?.trace).toBe(true);
+        expect(browser?.runtimeExecutable).toBe('/explicit/edge');
+        expect(jest.mocked(cp.spawn).mock.calls[0][1]).not.toContain('--DevToolsProxyLogging');
+        expect(jest.mocked(cp.spawn).mock.calls[0][2]?.env?.WASMDBG_LOGGING).toBeUndefined();
+    });
     test('explicit prototype host uses the configured dotnet without acquisition and scopes logs to proxy', async () => {
         const oldDotnet = process.env.VSCODE_CSHARP_WASMDBG_DOTNET;
         const oldArtifacts = process.env.VSCODE_CSHARP_WASMDBG_ARTIFACT_DIR;

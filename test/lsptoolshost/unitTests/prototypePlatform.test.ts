@@ -17,7 +17,9 @@ import {
     sha256,
     validateProfilePath,
     verifyAssets,
+    verifiedConcordExecutable,
 } from '../../../tasks/debugger/prototype/prototypeConfig';
+import { bundlePrototypeProvenance } from '../../../tasks/debugger/prototype/prototypeEvidence';
 import { ownedCleanupCommand, ownedSpawnOptions, stopOwned } from '../../../tasks/debugger/prototype/ownedProcesses';
 
 let fixture: string;
@@ -246,6 +248,8 @@ describe('Prototype host and local configuration preflight', () => {
         expect(stage.startsWith(config.artifactRoot + path.sep)).toBe(true);
         expect(fs.lstatSync(path.join(stage, 'extension/dist')).isSymbolicLink()).toBe(false);
         expect(fs.readFileSync(path.join(stage, 'extension/dist/extension.js'), 'utf8')).toBe('fixture');
+        expect(fs.existsSync(path.join(stage, 'extension/.debugger'))).toBe(false);
+        expect(fs.existsSync(path.join(fixture, 'concord/install.Lock'))).toBe(false);
         expect(
             JSON.parse(fs.readFileSync(path.join(stage, 'extension/package.json'), 'utf8')).runtimeDependencies
         ).toEqual([]);
@@ -255,6 +259,10 @@ describe('Prototype host and local configuration preflight', () => {
         const launch = JSON.parse(fs.readFileSync(path.join(stage, 'havit/.vscode/launch.json'), 'utf8'))
             .configurations[0];
         expect(launch.dotNetConfig.debugServer).toBe(config.ports.dap);
+        expect(launch.trace).toBe(true);
+        expect(
+            JSON.parse(fs.readFileSync(path.join(stage, 'sample/.vscode/launch.json'), 'utf8')).configurations[0].trace
+        ).toBe(true);
         expect(launch.browserConfig.userDataDir.startsWith(stage)).toBe(true);
         expect(fs.readFileSync(path.join(stage, 'havit/Havit.Blazor.Documentation.csproj'), 'utf8')).toContain(
             '<UseCoreCLR>true'
@@ -263,12 +271,13 @@ describe('Prototype host and local configuration preflight', () => {
     });
     test('common CLI parses spaced config arguments and fresh log environment without any helper launch', () => {
         const entry = path.resolve('tasks/debugger/prototype/prototype.js');
-        const code = `const cli=require(${JSON.stringify(entry)});const config={executables:{dotnet:process.execPath}};console.log(JSON.stringify({parsed:cli.parseArguments(['run','havit','1','capability','--config','folder with spaces/local.json']),env:cli.childEnvironment(config,process.argv[1])}));`;
+        const code = `const cli=require(${JSON.stringify(entry)});const config={executables:{dotnet:process.execPath},paths:{concordPublish:process.argv[1]}};console.log(JSON.stringify({parsed:cli.parseArguments(['run','havit','1','capability','--config','folder with spaces/local.json']),env:cli.childEnvironment(config,process.argv[1])}));`;
         const result = JSON.parse(execFileSync(process.execPath, ['-e', code, fixture], { encoding: 'utf8' }));
         expect(result.parsed.selector).toBe('havit');
         expect(result.parsed.filename).toContain('folder with spaces');
         expect(result.env.VSCODE_CSHARP_WASMDBG_ARTIFACT_DIR).toBe(path.join(fixture, 'proxy-logs'));
         expect(result.env.WASMDBG_ARTIFACT_DIR).toBeUndefined();
+        expect(result.env.VSCODE_CSHARP_WASMDBG_CONCORD).toBe(fixture);
         expect(fs.existsSync(path.join(fixture, 'proxy-logs'))).toBe(false);
         expect(() =>
             execFileSync(
@@ -280,6 +289,77 @@ describe('Prototype host and local configuration preflight', () => {
                 { stdio: 'pipe' }
             )
         ).toThrow();
+    });
+    test('open and run select the complete verified producer package without a staged native executable', () => {
+        const f = configFixture();
+        const config = loadMachineConfig(f.configFile, f.host);
+        const manifest = preflight(config, f.host);
+        expect(verifiedConcordExecutable(config, f.host, manifest)).toBe(
+            path.join(config.paths.concordPublish, f.host.dap)
+        );
+        for (const file of ['prototype.js', 'runStepCapabilities.js']) {
+            const source = fs.readFileSync(path.join('tasks/debugger/prototype', file), 'utf8');
+            expect(source).toContain('verifiedConcordExecutable(');
+            expect(source).not.toContain('extension/.debugger');
+        }
+        write('concord/changed-companion.dll');
+        expect(() => verifiedConcordExecutable(config, f.host, manifest)).toThrow('undeclared');
+        fs.unlinkSync(path.join(fixture, 'concord/changed-companion.dll'));
+        write(`concord/${f.host.dap}`, 'changed');
+        expect(() => verifiedConcordExecutable(config, f.host, manifest)).toThrow('mismatch');
+    });
+    test('post-run cleanup verifies exact owned PIDs/groups and records failures without launching helpers', () => {
+        const moduleFile = path.resolve('tasks/debugger/prototype/runStepCapabilities.js');
+        const code = `const fs=require('fs'),path=require('path');const {verifyCleanup}=require(${JSON.stringify(moduleFile)});const run=process.argv[1];process.kill=(pid)=>{if(process.argv[2]==='alive')return true;const e=Error('gone');e.code='ESRCH';throw e;};verifyCleanup(run,{ports:{}},[{pid:123}]).then(()=>console.log(fs.readFileSync(path.join(run,'post-cleanup-verification.json'),'utf8'))).catch(e=>{console.error(e);process.exitCode=1;});`;
+        const passed = write('clean/fixture');
+        const failed = write('unclean/fixture');
+        const result = JSON.parse(
+            execFileSync(process.execPath, ['-e', code, path.dirname(passed), 'gone'], { encoding: 'utf8' })
+        );
+        expect(result.processes).toEqual([
+            { pid: 123, exists: false },
+            { pid: -123, exists: false },
+        ]);
+        expect(() =>
+            execFileSync(process.execPath, ['-e', code, path.dirname(failed), 'alive'], { stdio: 'pipe' })
+        ).toThrow();
+        expect(
+            JSON.parse(fs.readFileSync(path.join(path.dirname(failed), 'post-cleanup-verification.json'), 'utf8'))
+                .failures
+        ).toHaveLength(2);
+    });
+    test('source provenance keeps immutable bases and verified local patches inside each result', () => {
+        const f = configFixture();
+        const patch = write('local-native.diff', 'local unpublished source change');
+        const raw = {
+            ...f.manifest,
+            sources: [
+                {
+                    id: 'concord',
+                    origin: 'https://example.test/private-native',
+                    ref: 'refs/heads/prototype',
+                    commit: '1'.repeat(40),
+                    localPatch: { path: patch, sha256: sha256(patch) },
+                },
+            ],
+        };
+        fs.writeFileSync(f.manifestFile, JSON.stringify(raw));
+        const config = loadMachineConfig(f.configFile, f.host);
+        const manifest = preflight(config, f.host);
+        const result = path.join(fixture, 'result');
+        fs.mkdirSync(result);
+        bundlePrototypeProvenance(result, f.configFile, config, manifest, f.host, ['prototype', 'run']);
+        const bundled = JSON.parse(fs.readFileSync(path.join(result, 'provenance/artifact-cohort.json'), 'utf8'));
+        expect(bundled.sources[0].commit).toBe('1'.repeat(40));
+        expect(bundled.sources[0].localPatch.path).toBe('concord.diff');
+        expect(sha256(path.join(result, 'provenance/concord.diff'))).toBe(sha256(patch));
+        expect(sha256(path.join(result, 'provenance/artifact-cohort.original.json'))).toBe(sha256(f.manifestFile));
+        expect(sha256(path.join(result, 'provenance/machine.original.json'))).toBe(sha256(f.configFile));
+        write('local-native.diff', 'changed patch');
+        expect(() => preflight(config, f.host)).toThrow('local source patch');
+        expect(() =>
+            bundlePrototypeProvenance(fixture, f.configFile, config, { ...manifest, sources: undefined }, f.host, [])
+        ).toThrow('source origins');
     });
     test('asset cohort/hash/traversal/stale overlays fail rather than overwrite', () => {
         const list = assets('assets', ['valid.dll']);

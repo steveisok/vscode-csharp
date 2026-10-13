@@ -55,6 +55,13 @@ export interface SourceManifest {
     cohortId: string;
     targetArchitecture: 'wasm32';
     versions: Record<string, string>;
+    sources?: {
+        id: string;
+        origin: string;
+        ref: string;
+        commit: string;
+        localPatch?: { path: string; sha256: string };
+    }[];
     hosts: Record<
         string,
         {
@@ -103,6 +110,18 @@ export interface MachineConfig {
     allowUnvalidatedHost?: boolean;
     browserType: 'edge' | 'chrome';
 }
+export function verifiedConcordExecutable(config: MachineConfig, host: HostPlatform, manifest: SourceManifest): string {
+    verifyAssets(config.paths.concordPublish, manifest.hosts[host.key].concord, manifest.cohortId, 'Concord');
+    const executable = path.join(config.paths.concordPublish, host.dap);
+    if (!fs.statSync(executable).isFile()) {
+        throw new Error(`Missing ${host.key} Concord executable.`);
+    }
+    if (host.platform !== 'win32') {
+        fs.accessSync(executable, fs.constants.X_OK);
+    }
+    return executable;
+}
+
 type RecordValue = Record<string, unknown>;
 function object(value: unknown, label: string): RecordValue {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -510,11 +529,45 @@ export function preflight(config: MachineConfig, host = hostPlatform(process.pla
     const versions = Object.fromEntries(
         Object.entries(object(m.versions, 'versions')).map(([key, value]) => [key, text(value, `versions.${key}`)])
     );
+    const sources: SourceManifest['sources'] = m.sources === undefined ? undefined : [];
+    if (sources) {
+        if (!Array.isArray(m.sources) || !m.sources.length) {
+            throw new Error('sources must contain immutable repository identities.');
+        }
+        const ids = new Set<string>();
+        for (const raw of m.sources) {
+            const source = object(raw, 'source provenance');
+            const id = text(source.id, 'source id');
+            const commit = text(source.commit, 'source commit');
+            if (!/^[a-zA-Z0-9-]+$/.test(id) || ids.has(id) || !/^[0-9a-f]{40}$/.test(commit)) {
+                throw new Error('Source provenance requires unique safe IDs and full immutable base commits.');
+            }
+            ids.add(id);
+            const localPatch = source.localPatch === undefined ? undefined : object(source.localPatch, 'local patch');
+            let patch: NonNullable<SourceManifest['sources']>[number]['localPatch'];
+            if (localPatch) {
+                const file = text(localPatch.path, 'local patch path');
+                const hash = text(localPatch.sha256, 'local patch hash');
+                if (!path.isAbsolute(file) || !/^[0-9a-f]{64}$/.test(hash) || sha256(file) !== hash) {
+                    throw new Error(`${id}: local source patch hash/path mismatch.`);
+                }
+                patch = { path: file, sha256: hash };
+            }
+            sources.push({
+                id,
+                origin: text(source.origin, 'source origin'),
+                ref: text(source.ref, 'source ref'),
+                commit,
+                ...(patch ? { localPatch: patch } : {}),
+            });
+        }
+    }
     return {
         schemaVersion: 1,
         cohortId,
         targetArchitecture: 'wasm32',
         versions,
+        ...(sources ? { sources } : {}),
         hosts: {
             [host.key]: {
                 concord: verifyAssets(config.paths.concordPublish, h.concord, cohortId, 'Concord'),

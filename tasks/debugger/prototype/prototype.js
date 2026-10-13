@@ -10,7 +10,7 @@ const compiled = path.join(root, 'out/tasks/debugger/prototype');
 if (!fs.existsSync(path.join(compiled, 'prototypeConfig.js'))) {
     throw Error('Compile maintained tools first: npx tsc -p tsconfig.json (extension bundle: npm run packageDev).');
 }
-const { hostPlatform, loadMachineConfig, preflight, validateProfilePath } = require(
+const { hostPlatform, loadMachineConfig, preflight, validateProfilePath, verifiedConcordExecutable } = require(
     path.join(compiled, 'prototypeConfig.js')
 );
 const { OwnedProcesses } = require(path.join(compiled, 'ownedProcesses.js'));
@@ -65,6 +65,7 @@ function childEnvironment(config, run) {
         DOTNET_ROOT: path.dirname(config.executables.dotnet),
         VSCODE_CSHARP_WASMDBG_DOTNET: config.executables.dotnet,
         VSCODE_CSHARP_WASMDBG_ARTIFACT_DIR: path.join(run, 'proxy-logs'),
+        VSCODE_CSHARP_WASMDBG_CONCORD: config.paths.concordPublish,
     };
     delete env.WASMDBG_ARTIFACT_DIR;
     delete env.DOTNET_WASM_DBI_CONTINUE_TRACE;
@@ -97,6 +98,7 @@ async function main() {
             mode: args.mode,
             createPrivateProfile,
             childEnvironment,
+            configFile: args.filename,
         });
     }
     const owned = new OwnedProcesses();
@@ -122,7 +124,7 @@ async function main() {
             'App server'
         );
         const dap = owned.spawn(
-            path.join(stage, 'extension/.debugger', host.arch, host.dap),
+            verifiedConcordExecutable(config, host, manifest),
             [`--server=${config.ports.dap}`, '--consoleLogging'],
             { cwd: stage, env, stdio: ['ignore', 'pipe', 'pipe'] }
         );

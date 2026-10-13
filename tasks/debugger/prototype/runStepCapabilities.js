@@ -17,8 +17,12 @@ const {
     relativeReportLink,
     timingDistributions,
     hasMatchingCapability,
+    bundlePrivateProfileLogs,
+    summarizeObservedRuns,
 } = require(path.join(toolRoot, 'out/test/lsptoolshost/integrationTests/debuggerReports.js'));
 const { OwnedProcesses } = require(path.join(toolRoot, 'out/tasks/debugger/prototype/ownedProcesses.js'));
+const { verifiedConcordExecutable } = require(path.join(toolRoot, 'out/tasks/debugger/prototype/prototypeConfig.js'));
+const { bundlePrototypeProvenance } = require(path.join(toolRoot, 'out/tasks/debugger/prototype/prototypeEvidence.js'));
 
 async function freePort(port) {
     const listener = net.createServer();
@@ -26,6 +30,57 @@ async function freePort(port) {
         listener.once('error', reject);
         listener.listen(port, '127.0.0.1', () => listener.close(resolve));
     });
+}
+async function verifyCleanup(run, machine, children) {
+    const receipt = { verifiedAt: new Date().toISOString(), processes: [], ports: [], failures: [] };
+    for (const child of children) {
+        if (!child.pid) continue;
+        for (const pid of process.platform === 'win32' ? [child.pid] : [child.pid, -child.pid]) {
+            try {
+                process.kill(pid, 0);
+                receipt.processes.push({ pid, exists: true });
+                receipt.failures.push(`Owned process/group ${pid} still exists.`);
+            } catch (error) {
+                if (error.code !== 'ESRCH') throw error;
+                receipt.processes.push({ pid, exists: false });
+            }
+        }
+    }
+    const ports = new Set(Object.values(machine.ports));
+    function inspectLogs(directory) {
+        for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+            const file = path.join(directory, entry.name);
+            if (entry.isDirectory()) inspectLogs(file);
+            else if (entry.name.endsWith('VsWebAssemblyBridge.log')) {
+                const text = fs.readFileSync(file, 'utf8');
+                for (const match of text.matchAll(
+                    /(?:Listening iCorDebug on: |Waiting for browser on: |Now listening on: http:\/\/127\.0\.0\.1:)(\d+)/g
+                )) {
+                    ports.add(Number(match[1]));
+                }
+            }
+        }
+    }
+    const logs = path.join(run, 'vscode-logs');
+    if (fs.existsSync(logs)) inspectLogs(logs);
+    const attach = path.join(run, 'managed-attach-result.json');
+    if (fs.existsSync(attach)) {
+        for (const event of JSON.parse(fs.readFileSync(attach)).browserMessages) {
+            const match = String(event.message.body?.output).match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//);
+            if (match) ports.add(Number(match[1]));
+        }
+    }
+    for (const port of ports) {
+        try {
+            await freePort(port);
+            receipt.ports.push({ port, available: true });
+        } catch (error) {
+            receipt.ports.push({ port, available: false, error: String(error) });
+            receipt.failures.push(`Owned listener port ${port} is unavailable after cleanup.`);
+        }
+    }
+    fs.writeFileSync(path.join(run, 'post-cleanup-verification.json'), JSON.stringify(receipt, null, 2), { flag: 'wx' });
+    if (receipt.failures.length) throw Error(receipt.failures.join(' '));
 }
 async function waitReady(check, child, label) {
     const deadline = Date.now() + 20000;
@@ -67,9 +122,6 @@ async function runStepCapabilities(options) {
     if (handoff.nextPilotHeldUntilVerifiedDacChange === true) {
         throw Error(`Workload pilot is held pending a verified DAC correction: ${handoff.currentManagedBlocker}`);
     }
-    if (selector === 'havit' && repetitions > 1 && handoff.debuggerCapabilitiesVerified !== true) {
-        throw Error('Havit automatic stop/Locals/stepping pilot must pass before repeated measurement.');
-    }
     const workload = parseDebuggerWorkload(config);
     if (config.diagnosticOnly === true && mode === 'steps') {
         throw Error('Temporary diagnostic workload cannot produce headline measurements.');
@@ -83,7 +135,7 @@ async function runStepCapabilities(options) {
     const cohort = Object.fromEntries(
         [
             ['extensionBundle', path.join(stage, 'extension/dist/extension.js')],
-            ['concord', path.join(stage, 'extension/.debugger', host.arch, host.concordEngine)],
+            ['concord', path.join(machine.paths.concordPublish, host.concordEngine)],
             [
                 'browserDebugHost',
                 path.join(stage, 'extension/.vswebassemblybridge/Microsoft.Diagnostics.BrowserDebugHost.dll'),
@@ -105,6 +157,7 @@ async function runStepCapabilities(options) {
             ['appPdb', path.join(framework, workload.assembly + '.pdb')],
         ].map(([name, file]) => [name, crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')])
     );
+    cohort.sourceManifest = crypto.createHash('sha256').update(fs.readFileSync(machine.manifest)).digest('hex');
     cohort.nativeWasmFiles = Object.fromEntries(
         nativeWasm.map((file) => [
             file,
@@ -121,6 +174,8 @@ async function runStepCapabilities(options) {
     }
     const identity = allocateReportDirectory(artifactRoot, selector, mode);
     const batch = path.join(artifactRoot, identity.directory);
+    const command = ['prototype', 'run', selector, String(repetitions), mode, '--config', options.configFile];
+    bundlePrototypeProvenance(batch, options.configFile, machine, manifest, host, command);
     const versions = Object.fromEntries(
         Object.entries({
             node: process.version,
@@ -176,6 +231,7 @@ async function runStepCapabilities(options) {
         for (let index = 0; index < repetitions; index++) {
             const runIdentity = allocateReportDirectory(artifactRoot, selector, mode, identity);
             const run = path.join(artifactRoot, runIdentity.directory);
+            bundlePrototypeProvenance(run, options.configFile, machine, manifest, host, command);
             const runReport = {
                 ...runIdentity,
                 workload: selector,
@@ -210,6 +266,7 @@ async function runStepCapabilities(options) {
             const owned = new OwnedProcesses();
             const helpers = owned.children;
             let runSamples = [];
+            let profile;
             const env = childEnvironment(machine, run);
             const start = (command, args, log) => {
                 const fd = fs.openSync(path.join(run, log), 'w');
@@ -221,7 +278,7 @@ async function runStepCapabilities(options) {
             try {
                 for (const port of [Number(new URL(workload.url).port), machine.ports.dap, machine.ports.ui])
                     await freePort(port);
-                const profile = createPrivateProfile(machine, host);
+                profile = createPrivateProfile(machine, host);
                 fs.writeFileSync(
                     path.join(run, 'private-profile.json'),
                     JSON.stringify(
@@ -229,7 +286,7 @@ async function runStepCapabilities(options) {
                             profile,
                             owned: true,
                             explanation:
-                                'Separate short private native profile; no symlink/admin rights required. Logs retained here, not copied into giant archives.',
+                                'Separate short private native profile; logs are copied into this result after owned cleanup, not the profile/cache.',
                         },
                         null,
                         2
@@ -249,7 +306,7 @@ async function runStepCapabilities(options) {
                     'App server'
                 );
                 const dap = start(
-                    path.join(stage, 'extension/.debugger', host.arch, host.dap),
+                    verifiedConcordExecutable(machine, host, manifest),
                     [`--server=${machine.ports.dap}`, '--consoleLogging'],
                     'native-console.log'
                 );
@@ -346,7 +403,6 @@ async function runStepCapabilities(options) {
                     const result = JSON.parse(fs.readFileSync(path.join(run, 'managed-attach-result.json'), 'utf8'));
                     if (!result.entryCapabilitiesCheckPassed) throw Error('Managed entry pilot did not pass.');
                 }
-                completedRuns++;
                 runReport.status = 'passed';
                 runReport.completedSteps = runSamples.length;
             } catch (error) {
@@ -370,6 +426,7 @@ async function runStepCapabilities(options) {
                     cleanupFailure = String(error);
                     runReport.status = 'failed';
                     runReport.failure ??= cleanupFailure;
+                    batchReport.failure ??= cleanupFailure;
                     suiteFailed = true;
                     console.error('Owned cleanup failed; original run error (if any):', runReport.failure, error);
                 } finally {
@@ -394,53 +451,46 @@ async function runStepCapabilities(options) {
                         2
                     )
                 );
+                let retentionFailure;
+                try {
+                    if (cleanupFailure) {
+                        throw Error(`Private logs cannot be frozen before confirmed owned cleanup: ${cleanupFailure}`);
+                    }
+                    const retained = bundlePrivateProfileLogs(run, profile);
+                    if (retained.status !== 'copied' && runReport.status === 'passed') {
+                        throw Error(`Passed run has incomplete diagnostic retention: ${retained.reason}`);
+                    }
+                    await verifyCleanup(run, machine, helpers);
+                } catch (error) {
+                    retentionFailure = String(error);
+                    runReport.status = 'failed';
+                    runReport.failure ??= retentionFailure;
+                    batchReport.failure ??= retentionFailure;
+                    suiteFailed = true;
+                    fs.writeFileSync(path.join(run, 'log-retention-failure.txt'), retentionFailure);
+                    console.error('Diagnostic retention failed; original run error (if any):', runReport.failure, error);
+                }
+                const observed = summarizeObservedRuns(runReports, all, mode, repetitions);
+                completedRuns = observed.completedRuns;
                 fs.writeFileSync(
                     path.join(batch, 'measurement-summary.json'),
                     JSON.stringify(
                         {
                             batchId: identity.batchId,
                             runIds: runReports.map((report) => report.runId),
-                            status: suiteFailed ? 'failed' : completedRuns === repetitions ? 'passed' : 'incomplete',
+                            ...observed,
                             workload,
                             mode,
                             cohort,
                             repetitionsRequested: repetitions,
-                            completedRuns,
-                            completedSteps: all.length,
-                            supportedScenarioPassed: !suiteFailed && completedRuns === repetitions,
-                            samples: all,
-                            distributions:
-                                mode !== 'steps'
-                                    ? {}
-                                    : Object.fromEntries(
-                                          [
-                                              'commandToStopMs',
-                                              'commandToAutomaticInspectionMs',
-                                              'commandToVisibleRefreshObservationMs',
-                                          ].map((metric) => {
-                                              const values = all.map((sample) => sample[metric]).sort((a, b) => a - b);
-                                              const middle = Math.floor(values.length / 2);
-                                              return [
-                                                  metric,
-                                                  {
-                                                      n: values.length,
-                                                      min: values[0],
-                                                      median: values.length
-                                                          ? values.length % 2
-                                                              ? values[middle]
-                                                              : (values[middle - 1] + values[middle]) / 2
-                                                          : null,
-                                                      max: values[values.length - 1],
-                                                      p95: null,
-                                                  },
-                                              ];
-                                          })
-                                      ),
+                            supportedScenarioPassed: observed.status === 'passed',
                             definitions: {
                                 automaticUiOnly: true,
                                 explicitStackScopesVariablesRequests: 0,
                                 headlineMeasurementEnabled:
-                                    mode === 'steps' && !suiteFailed && completedRuns === repetitions,
+                                    mode === 'steps' && observed.status === 'passed',
+                                sampleAcceptance:
+                                    'Passed run status after owned cleanup and diagnostic retention; failed-run observed samples are excluded.',
                                 measurementRequested: mode === 'steps',
                                 warmBrowserCache: false,
                                 panes: 'Call Stack + Variables/Locals, expanded',
@@ -484,20 +534,9 @@ async function runStepCapabilities(options) {
                     { label: 'Batch README', path: relativeReportLink(run, path.join(batch, 'README.md')) },
                     ...evidenceLinks(run),
                 ];
-                const profileFile = path.join(run, 'private-profile.json');
-                if (fs.existsSync(profileFile)) {
-                    const profile = JSON.parse(fs.readFileSync(profileFile, 'utf8')).profile;
-                    if (fs.existsSync(path.join(profile, 'logs'))) {
-                        const { pathToFileURL } = require('url');
-                        runReport.links.push({
-                            label: 'Original private VS Code/js-debug logs (native file URI)',
-                            path: pathToFileURL(path.join(profile, 'logs')).href,
-                        });
-                    }
-                }
                 batchReport.status = suiteFailed ? 'failed' : completedRuns === repetitions ? 'passed' : 'incomplete';
                 batchReport.completedRuns = completedRuns;
-                batchReport.completedSteps = all.length;
+                batchReport.completedSteps = observed.completedSteps;
                 batchReport.finishedAt = batchReport.status === 'incomplete' ? null : runReport.finishedAt;
                 batchReport.links = [
                     ...runReports.map((report) => ({
@@ -508,7 +547,7 @@ async function runStepCapabilities(options) {
                 ];
                 try {
                     writeReport(artifactRoot, runReport, runSamples);
-                    writeReport(artifactRoot, batchReport, all);
+                    writeReport(artifactRoot, batchReport, observed.samples);
                 } catch (reportError) {
                     console.error(
                         'Report generation failed; original run error (if any):',
@@ -517,7 +556,7 @@ async function runStepCapabilities(options) {
                     );
                     if (!suiteFailed) throw reportError;
                 }
-                if (cleanupFailure && !batchReport.failure) throw Error(cleanupFailure);
+                if (cleanupFailure || retentionFailure) throw Error(cleanupFailure || retentionFailure);
             }
         }
     } catch (error) {
@@ -540,4 +579,4 @@ async function runStepCapabilities(options) {
     }
     console.log(`Debugger workload evidence: ${batch}`);
 }
-module.exports = { runStepCapabilities, freePort, waitReady };
+module.exports = { runStepCapabilities, freePort, waitReady, verifyCleanup };

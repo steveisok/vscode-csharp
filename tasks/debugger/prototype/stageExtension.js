@@ -37,12 +37,9 @@ function stageExtension(config, host, manifest) {
     ]) {
         copy(path.join(config.extensionRoot, asset), path.join(extension, asset));
     }
-    copy(config.paths.concordPublish, path.join(extension, '.debugger', host.arch));
     copy(config.paths.proxyPublish, path.join(extension, '.vswebassemblybridge'));
-    for (const folder of [path.join(extension, '.debugger', host.arch), path.join(extension, '.vswebassemblybridge')]) {
-        const marker = path.join(folder, 'install.Lock');
-        if (!fs.existsSync(marker)) fs.writeFileSync(marker, '');
-    }
+    const marker = path.join(extension, '.vswebassemblybridge', 'install.Lock');
+    if (!fs.existsSync(marker)) fs.writeFileSync(marker, '');
     for (const helper of ['captureUi.js', 'navigateWorkloadHistory.js']) {
         copy(path.join(__dirname, helper), path.join(stage, helper));
     }
@@ -109,6 +106,7 @@ function stageExtension(config, host, manifest) {
                     : 'Havit synchronous URL-helper debugger baseline',
             type: 'blazorwasm',
             request: 'attach',
+            trace: true,
             projectPath: path.join(workspace, `${entry.assembly}.csproj`),
             cwd: workspace,
             url,
