@@ -39,7 +39,14 @@ export async function stopOwned(child: ChildProcess, platform = process.platform
             if (exited) {
                 return;
             }
-            await promisify(execFile)(action.command, action.args, { windowsHide: true });
+            try {
+                await promisify(execFile)(action.command, action.args, { windowsHide: true });
+            } catch (error) {
+                // Windowless console helpers refuse a non-forced taskkill; the bounded wait below escalates to /F.
+                if (force) {
+                    throw error;
+                }
+            }
         } else {
             try {
                 process.kill(action.group, action.signal);
