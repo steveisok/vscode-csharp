@@ -167,7 +167,10 @@ testPrototype('The selected browser workload attaches and completes its requeste
             userDataDir: path.join(run, 'browser-profile'),
         };
         expect(process.env.WASM_PROTOTYPE_BROWSER).toBeTruthy();
-        expect(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath).toBe(workspace);
+        // VS Code's Uri.fsPath lowercases the Windows drive letter; compare it case-insensitively only.
+        const normalizeDrive = (value: string | undefined) =>
+            process.platform === 'win32' && value ? value.replace(/^[A-Z]:/, (drive) => drive.toLowerCase()) : value;
+        expect(normalizeDrive(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath)).toBe(normalizeDrive(workspace));
         expect(await vscode.debug.startDebugging(vscode.workspace.workspaceFolders?.[0], launch)).toBe(true);
 
         const deadline = Date.now() + 90000;
