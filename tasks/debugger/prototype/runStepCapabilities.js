@@ -341,6 +341,8 @@ async function runStepCapabilities(options) {
                     WASM_PROTOTYPE_UI_PORT: String(machine.ports.ui),
                     WASM_PROTOTYPE_NODE: process.execPath,
                     WASM_PROTOTYPE_BROWSER: machine.executables.browser,
+                    // Keep the fresh browser profile under the short owned private profile; deep run paths exceed Windows MAX_PATH.
+                    WASM_PROTOTYPE_BROWSER_PROFILE: path.join(profile, 'edge-profile'),
                     WASM_PROTOTYPE_BROWSER_TYPE: machine.browserType,
                 };
                 const testLaunch = {

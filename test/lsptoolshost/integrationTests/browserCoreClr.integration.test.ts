@@ -164,7 +164,7 @@ testPrototype('The selected browser workload attaches and completes its requeste
             ...launch.browserConfig,
             runtimeExecutable: process.env.WASM_PROTOTYPE_BROWSER,
             runtimeArgs: ['--headless=new', '--no-first-run', '--no-default-browser-check', '--window-size=1280,900'],
-            userDataDir: path.join(run, 'browser-profile'),
+            userDataDir: process.env.WASM_PROTOTYPE_BROWSER_PROFILE || path.join(run, 'browser-profile'),
         };
         expect(process.env.WASM_PROTOTYPE_BROWSER).toBeTruthy();
         // VS Code's Uri.fsPath lowercases the Windows drive letter; compare it case-insensitively only.
