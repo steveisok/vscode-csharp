@@ -109,6 +109,7 @@ export interface MachineConfig {
     sourceMaps: { small: Record<string, string>; havit: Record<string, string> };
     allowUnvalidatedHost?: boolean;
     browserType: 'edge' | 'chrome';
+    browserProfile?: string;
 }
 export function verifiedConcordExecutable(config: MachineConfig, host: HostPlatform, manifest: SourceManifest): string {
     verifyAssets(config.paths.concordPublish, manifest.hosts[host.key].concord, manifest.cohortId, 'Concord');
@@ -306,6 +307,12 @@ export function loadMachineConfig(
         );
     }
     validateProfilePath(path.join(profileRoot, 'r-' + '0'.repeat(12)), host);
+    // Optional user-authorized shared browser profile (e.g. a policy-required signed-in Edge profile); reported as a deviation.
+    const browserProfile =
+        raw.browserProfile === undefined ? undefined : resolveConfigPath(raw.browserProfile, variables, configDir);
+    if (browserProfile && !fs.statSync(browserProfile).isDirectory()) {
+        throw new Error('browserProfile must be an existing dedicated browser user-data directory.');
+    }
     return {
         extensionRoot,
         artifactRoot,
@@ -317,6 +324,7 @@ export function loadMachineConfig(
         sourceMaps: resolvedMaps as MachineConfig['sourceMaps'],
         allowUnvalidatedHost: raw.allowUnvalidatedHost === true,
         browserType: raw.browserType,
+        ...(browserProfile ? { browserProfile } : {}),
     };
 }
 export function sha256(file: string): string {

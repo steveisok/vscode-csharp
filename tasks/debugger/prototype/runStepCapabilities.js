@@ -82,6 +82,16 @@ async function verifyCleanup(run, machine, children) {
     fs.writeFileSync(path.join(run, 'post-cleanup-verification.json'), JSON.stringify(receipt, null, 2), { flag: 'wx' });
     if (receipt.failures.length) throw Error(receipt.failures.join(' '));
 }
+function browserProfileRecord(machine) {
+    return machine.browserProfile
+        ? {
+              mode: 'shared-user-authorized',
+              path: machine.browserProfile,
+              deviation:
+                  'User-authorized deviation from the fresh-profile-per-run rule: a dedicated signed-in browser profile is reused because policy forces browser sign-in. Only logs, not profile data, are retained.',
+          }
+        : { mode: 'fresh-per-run' };
+}
 async function waitReady(check, child, label) {
     const deadline = Date.now() + 20000;
     let last;
@@ -217,6 +227,7 @@ async function runStepCapabilities(options) {
                 createdAt: new Date().toISOString(),
                 singleNativeSwapForbidden: true,
                 knownNativeCloseLimitationsNotSuppressed: true,
+                browserProfile: browserProfileRecord(machine),
             },
             null,
             2
@@ -258,6 +269,7 @@ async function runStepCapabilities(options) {
                         cohort,
                         versions,
                         startedAt: runIdentity.generatedAt,
+                        browserProfile: browserProfileRecord(machine),
                     },
                     null,
                     2
@@ -341,8 +353,8 @@ async function runStepCapabilities(options) {
                     WASM_PROTOTYPE_UI_PORT: String(machine.ports.ui),
                     WASM_PROTOTYPE_NODE: process.execPath,
                     WASM_PROTOTYPE_BROWSER: machine.executables.browser,
-                    // Keep the fresh browser profile under the short owned private profile; deep run paths exceed Windows MAX_PATH.
-                    WASM_PROTOTYPE_BROWSER_PROFILE: path.join(profile, 'edge-profile'),
+                    // Keep the browser profile under a short path; deep run paths exceed Windows MAX_PATH.
+                    WASM_PROTOTYPE_BROWSER_PROFILE: machine.browserProfile ?? path.join(profile, 'edge-profile'),
                     WASM_PROTOTYPE_BROWSER_TYPE: machine.browserType,
                 };
                 const testLaunch = {
@@ -494,7 +506,9 @@ async function runStepCapabilities(options) {
                                 sampleAcceptance:
                                     'Passed run status after owned cleanup and diagnostic retention; failed-run observed samples are excluded.',
                                 measurementRequested: mode === 'steps',
-                                warmBrowserCache: false,
+                                warmBrowserCache: machine.browserProfile
+                                    ? 'possible: shared user-authorized browser profile reused across runs'
+                                    : false,
                                 panes: 'Call Stack + Variables/Locals, expanded',
                                 applicationCpuNotSubtracted: true,
                                 startupOrRenderOrAsyncDelayMeasured: false,
@@ -509,7 +523,7 @@ async function runStepCapabilities(options) {
                                 implicitEvaluationPolicy:
                                     'Default UI formatting settings preserved; observe and report any automatic function evaluation separately.',
                                 adapterLogging: 'protocolMessages=true, other native diagnostics disabled',
-                                browser: `${machine.browserType} headless=new, new profile per run, default js-debug network cache disabled`,
+                                browser: `${machine.browserType} headless=new, ${machine.browserProfile ? `DEVIATION: shared user-authorized signed-in profile ${machine.browserProfile} reused across runs` : 'new profile per run'}, default js-debug network cache disabled`,
                                 requestedBrowserWindowSize: '1280x900, actual viewport recorded in entry observation',
                                 requestSumsOverlap: true,
                                 percentilePolicy: 'No p95 claim for this small bounded sample.',
