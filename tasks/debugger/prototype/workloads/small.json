@@ -5,6 +5,10 @@
     "handoff": "sample/runtime-handoff.json",
     "assembly": "Wasm.Browser.Sample",
     "url": "http://127.0.0.1:8000/index.html",
+    "extendedInspection": {
+        "notApplicable": true,
+        "notApplicableReason": "Debugger.Break is in static Main invoked by the runtime: no managed caller frame and no this."
+    },
     "stops": [
         { "sourceSuffix": "Program.cs", "line": 15, "localNames": ["args"], "localValues": { "args": "{string[0]}" } },
         { "sourceSuffix": "Program.cs", "line": 16, "localNames": ["args"], "localValues": { "args": "{string[0]}" } },

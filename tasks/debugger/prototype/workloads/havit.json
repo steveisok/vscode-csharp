@@ -17,6 +17,12 @@
         "readyMarker": "havitStartup"
     },
     "preparationTransitions": 2,
+    "extendedInspection": {
+        "callerFrameName": "DocPageNavigationItemsTracker.",
+        "callerLocals": ["this", "url", "pageKey"],
+        "forbiddenLocals": ["hashIndex"],
+        "thisMember": "_itemsByPage"
+    },
     "stops": [
         { "sourceSuffix": "UrlHelper.cs", "line": 15, "localNames": ["url"] },
         { "sourceSuffix": "UrlHelper.cs", "line": 16, "localNames": ["url"] },

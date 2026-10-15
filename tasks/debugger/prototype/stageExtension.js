@@ -40,7 +40,7 @@ function stageExtension(config, host, manifest) {
     copy(config.paths.proxyPublish, path.join(extension, '.vswebassemblybridge'));
     const marker = path.join(extension, '.vswebassemblybridge', 'install.Lock');
     if (!fs.existsSync(marker)) fs.writeFileSync(marker, '');
-    for (const helper of ['captureUi.js', 'navigateWorkloadHistory.js']) {
+    for (const helper of ['captureUi.js', 'navigateWorkloadHistory.js', 'uiInspectAction.js']) {
         copy(path.join(__dirname, helper), path.join(stage, helper));
     }
     fs.mkdirSync(path.join(stage, 'workloads'));
@@ -94,6 +94,9 @@ function stageExtension(config, host, manifest) {
             const hashIndex = `${url}#header-filtering`.indexOf('#');
             for (const stop of template.stops.filter((s) => s.line === 19 || s.line === 20)) {
                 stop.localValues = { hashIndex: String(hashIndex) };
+            }
+            if (template.extendedInspection) {
+                template.extendedInspection.callerLocalContains = { url: `${url}#header-filtering` };
             }
         }
         template.versions = manifest.versions;

@@ -9,6 +9,7 @@ import * as path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { DebuggerStopExpectation, DebuggerWorkload } from './debuggerWorkload';
+import { callerInspectionSequence, ExtendedInspectionContext, launchAndBreakTimings } from './extendedInspection';
 
 export interface TimedDebuggerRequest {
     command: string;
@@ -18,7 +19,7 @@ export interface TimedDebuggerRequest {
     finishedAt?: number;
     success?: boolean;
 }
-type Message = { session: string; message: Record<string, unknown> };
+type Message = { session: string; message: Record<string, unknown>; at?: number };
 type Frame = { id: number; name: string; line: number; column: number; source?: { path?: string } };
 type Variable = { name: string; value: string; type?: string; variablesReference: number };
 
@@ -30,11 +31,15 @@ export async function measureAutomaticDebuggerSteps(
     messages: Message[],
     requests: TimedDebuggerRequest[],
     stopTimes: number[],
-    pending: Map<number, TimedDebuggerRequest>
+    pending: Map<number, TimedDebuggerRequest>,
+    context?: ExtendedInspectionContext
 ) {
     const observed: object[] = [];
     const steps: object[] = [];
+    const commandStarts: number[] = [];
+    let extendedActions: Record<string, unknown> | undefined;
     const measurementEnabled = process.env.WASM_PROTOTYPE_MEASUREMENT_ENABLED !== '0';
+    const extendedEnabled = process.env.WASM_PROTOTYPE_EXTENDED_ACTIONS === '1';
     async function capture(label: string, stop?: DebuggerStopExpectation) {
         if (!process.env.WASM_PROTOTYPE_UI_PORT || !process.env.WASM_PROTOTYPE_NODE) {
             throw new Error('Owned UI inspection port and Node executable required.');
@@ -145,6 +150,7 @@ export async function measureAutomaticDebuggerSteps(
         for (let index = 1; index < workload.stops.length; index++) {
             const start = performance.now();
             const epoch = Date.now();
+            commandStarts[index] = start;
             await vscode.commands.executeCommand('workbench.action.debug.stepOver', session.id);
             const deadline = Date.now() + 15000;
             while (stopTimes.length <= index && Date.now() < deadline) {
@@ -189,7 +195,46 @@ export async function measureAutomaticDebuggerSteps(
                 });
             }
         }
-        return { steps, observed, automaticUiOnly: true };
+        if (extendedEnabled) {
+            if (!context) {
+                throw new Error('Extended inspection requires launch timing context.');
+            }
+            // Runs only after the final stop's existing automatic inspection, so F10 samples are unperturbed.
+            const breakTimings = launchAndBreakTimings(workload, run, messages, requests, stopTimes, context);
+            const topFrameLocals = (
+                observed as { completedAt: number; ui: { renderedUiObservedAtEpochMs: number } }[]
+            ).map((o, index) => ({
+                stopIndex: index,
+                line: workload.stops[index].line,
+                boundary: index === 0 ? 'managed stopped event' : 'Step Over command',
+                stoppedToAutomaticLocalsMs: o.completedAt - stopTimes[index],
+                commandToAutomaticLocalsMs: index === 0 ? undefined : o.completedAt - commandStarts[index],
+                stoppedToVisibleLocalsMs: o.ui.renderedUiObservedAtEpochMs - context.epochOffsetMs - stopTimes[index],
+                commandToVisibleLocalsMs:
+                    index === 0
+                        ? undefined
+                        : o.ui.renderedUiObservedAtEpochMs - context.epochOffsetMs - commandStarts[index],
+            }));
+            extendedActions = {
+                userDirectedDeparture:
+                    'User-authorized departure from measurement.md: UI-driven caller-frame selection and object expansion after the final stop.',
+                ...breakTimings,
+                expandTopFrameLocals: {
+                    label: 'automatic top-frame Locals population; no expandable top-frame variable exists',
+                    duplicatesStepInspectionField: true,
+                    perStop: topFrameLocals,
+                },
+            };
+            extendedActions.callerInspection = await callerInspectionSequence(
+                workload,
+                prototype,
+                run,
+                messages,
+                requests,
+                context
+            );
+        }
+        return { steps, observed, automaticUiOnly: !extendedEnabled, extendedActions };
     } catch (error) {
         await capture('capability-blocker-ui');
         throw error;
@@ -203,7 +248,8 @@ export async function measureAutomaticDebuggerSteps(
                     workload,
                     steps,
                     observed,
-                    automaticUiOnly: true,
+                    extendedActions,
+                    automaticUiOnly: !extendedEnabled,
                     measurementEnabled,
                     applicationCpuNotSubtracted: true,
                     timingsAreWallIntervalsNotOverlappingCommandSums: true,

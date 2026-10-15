@@ -32,7 +32,10 @@ testPrototype('The selected browser workload attaches and completes its requeste
     );
     const handoff = JSON.parse(fs.readFileSync(path.join(prototypeDirectory, workload.handoff), 'utf8'));
     assertRunnableWorkload(handoff);
-    const messages: { session: string; message: Record<string, unknown> }[] = [];
+    const messages: { session: string; message: Record<string, unknown>; at?: number }[] = [];
+    // Converts epoch stamps from other owned processes (UI/navigation helpers) into this host's performance.now().
+    const epochOffsetMs = Date.now() - performance.now();
+    let launchStartedAt: number | undefined;
     const browserMessages: { session: string; message: Record<string, unknown> }[] = [];
     const sessions: vscode.DebugSession[] = [];
     const disposables: vscode.Disposable[] = [];
@@ -91,7 +94,7 @@ testPrototype('The selected browser workload attaches and completes its requeste
                         }
                     },
                     onDidSendMessage(message) {
-                        messages.push({ session: session.id, message });
+                        messages.push({ session: session.id, message, at: performance.now() });
                         if (message.type === 'event' && message.event === 'stopped') {
                             stopTimes.push(performance.now());
                         }
@@ -171,6 +174,7 @@ testPrototype('The selected browser workload attaches and completes its requeste
         const normalizeDrive = (value: string | undefined) =>
             process.platform === 'win32' && value ? value.replace(/^[A-Z]:/, (drive) => drive.toLowerCase()) : value;
         expect(normalizeDrive(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath)).toBe(normalizeDrive(workspace));
+        launchStartedAt = performance.now();
         expect(await vscode.debug.startDebugging(vscode.workspace.workspaceFolders?.[0], launch)).toBe(true);
 
         const deadline = Date.now() + 90000;
@@ -359,7 +363,8 @@ testPrototype('The selected browser workload attaches and completes its requeste
                         messages,
                         timedRequests,
                         stopTimes,
-                        pending
+                        pending,
+                        { launchStartedAt: launchStartedAt!, epochOffsetMs }
                     );
                     stepCapabilitiesCheckPassed = true;
                     return;
@@ -429,6 +434,9 @@ testPrototype('The selected browser workload attaches and completes its requeste
                     ),
                     automaticInspectionOnly: true,
                     explicitInspectionRequests: 0,
+                    uiDrivenExtendedInspection: process.env.WASM_PROTOTYPE_EXTENDED_ACTIONS === '1',
+                    epochOffsetMs,
+                    launchStartedAt,
                 },
                 null,
                 2

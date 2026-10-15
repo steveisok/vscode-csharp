@@ -350,6 +350,8 @@ async function runStepCapabilities(options) {
                     WASM_PROTOTYPE_STEP_CAPABILITIES: '1',
                     WASM_PROTOTYPE_ENTRY_ONLY: mode === 'entry' ? '1' : '0',
                     WASM_PROTOTYPE_MEASUREMENT_ENABLED: mode === 'steps' ? '1' : '0',
+                    // User-directed extended actions: launch/break boundaries and UI caller inspection after the final stop.
+                    WASM_PROTOTYPE_EXTENDED_ACTIONS: '1',
                     WASM_PROTOTYPE_UI_PORT: String(machine.ports.ui),
                     WASM_PROTOTYPE_NODE: process.execPath,
                     WASM_PROTOTYPE_BROWSER: machine.executables.browser,
@@ -499,8 +501,10 @@ async function runStepCapabilities(options) {
                             repetitionsRequested: repetitions,
                             supportedScenarioPassed: observed.status === 'passed',
                             definitions: {
-                                automaticUiOnly: true,
+                                automaticUiOnly: false,
                                 explicitStackScopesVariablesRequests: 0,
+                                extendedInspectionDeparture:
+                                    'USER-DIRECTED departure from measurement.md: after the final F10 stop, the harness clicks the caller frame in Call Stack and expands caller this in Variables (UI-driven; VS Code issues the scopes/variables requests). Launch-to-stop and Debugger.Break boundaries are also recorded. F10 step samples are taken before these actions and are unchanged.',
                                 headlineMeasurementEnabled:
                                     mode === 'steps' && observed.status === 'passed',
                                 sampleAcceptance:
@@ -518,7 +522,7 @@ async function runStepCapabilities(options) {
                                 preCaptureQuiescenceMs: 300,
                                 inspectionTimeoutMs: 30000,
                                 untimedEntryDomResponseBoundMs: 10000,
-                                explicitManagedEvaluationOrObjectExpansionRequested: false,
+                                explicitManagedEvaluationOrObjectExpansionRequested: 'UI-driven caller this expansion after the final stop (user-directed); no explicit evaluation',
                                 automaticUiImplicitEvaluationExcluded: false,
                                 implicitEvaluationPolicy:
                                     'Default UI formatting settings preserved; observe and report any automatic function evaluation separately.',

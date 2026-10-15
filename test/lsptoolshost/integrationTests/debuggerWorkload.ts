@@ -34,6 +34,15 @@ export interface DebuggerWorkload {
         expectedRows?: string[];
     };
     server?: { command: string; args: string[] };
+    extendedInspection?: {
+        notApplicable?: boolean;
+        notApplicableReason?: string;
+        callerFrameName?: string;
+        callerLocals?: string[];
+        callerLocalContains?: Record<string, string>;
+        forbiddenLocals?: string[];
+        thisMember?: string;
+    };
 }
 
 export function parseDebuggerWorkload(value: unknown): DebuggerWorkload {
