@@ -126,7 +126,10 @@ function stageExtension(config, host, manifest) {
                 sourceFileMap: config.sourceMaps[selector],
                 justMyCode: true,
                 coreClrMobileDebuggerOptions: { assetsPath: path.join(webRoot, '_framework') },
-                logging: { diagnosticsLog: { protocolMessages: true } },
+                logging: {
+                    diagnosticsLog: { protocolMessages: true },
+                    ...(config.diagnosticLogging ? { elapsedTiming: true } : {}),
+                },
             },
         };
         fs.writeFileSync(

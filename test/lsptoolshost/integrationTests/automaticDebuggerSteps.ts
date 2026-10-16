@@ -145,6 +145,75 @@ export async function measureAutomaticDebuggerSteps(
             'Automatic Call Stack/Locals did not complete within the shared 30s bound, including 300ms quiescence; no explicit inspection fallback is permitted.'
         );
     }
+    async function closeFinalPause(kind: 'stepOver' | 'continue') {
+        // Diagnostic-only, unscored: resuming the final pause makes the proxy log that epoch's completion totals.
+        const command = kind === 'stepOver' ? 'next' : 'continue';
+        const stopsBefore = stopTimes.length;
+        const messagesBefore = messages.length;
+        const start = performance.now();
+        await vscode.commands.executeCommand(
+            kind === 'stepOver' ? 'workbench.action.debug.stepOver' : 'workbench.action.debug.continue',
+            session.id
+        );
+        let response: Record<string, unknown> | undefined;
+        let stopped: Message | undefined;
+        const deadline = Date.now() + 15000;
+        while (Date.now() < deadline) {
+            const recent = messages.slice(messagesBefore);
+            response = recent.find(
+                ({ message }) => message.type === 'response' && message.command === command
+            )?.message;
+            if (response && !response.success) {
+                throw new Error(`Closing ${command} failed: ${JSON.stringify(response)}`);
+            }
+            stopped = recent.find(({ message }) => message.type === 'event' && message.event === 'stopped');
+            if (kind === 'stepOver' ? stopped : response) {
+                break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        if (kind === 'stepOver' ? !stopped : !response) {
+            throw new Error(`Closing ${kind} did not complete within 15 s.`);
+        }
+        // Let VS Code's automatic refresh settle so teardown does not interrupt in-flight requests.
+        let quietSince: number | undefined;
+        const settle = Date.now() + 30000;
+        while (Date.now() < settle) {
+            const busy = [...pending.values()].some((r) =>
+                ['threads', 'stackTrace', 'scopes', 'variables'].includes(r.command)
+            );
+            quietSince = busy ? undefined : (quietSince ?? Date.now());
+            if (quietSince !== undefined && Date.now() - quietSince >= 300) {
+                break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        return {
+            kind,
+            unscored: true,
+            purpose:
+                'Close the final pause epoch so the proxy logs pause-completed totals and [Perf]; variant Continue for Gap B differential.',
+            commandToResponseMs:
+                (requests.find((r) => r.startedAt >= start && r.command === command)?.finishedAt ?? NaN) - start,
+            commandToStopMs: stopTimes.length > stopsBefore ? stopTimes[stopsBefore] - start : undefined,
+            stop: stopped?.message.body,
+            laterStops: messages
+                .slice(messagesBefore)
+                .filter(({ message }) => message.type === 'event' && message.event === 'stopped')
+                .map(({ message }) => message.body),
+            dap: requests
+                .filter((r) => r.startedAt >= start)
+                .map((r) => ({
+                    command: r.command,
+                    sequence: r.sequence,
+                    arguments: r.arguments,
+                    startedAtMs: r.startedAt - start,
+                    finishedAtMs: r.finishedAt === undefined ? undefined : r.finishedAt - start,
+                    success: r.success,
+                })),
+        };
+    }
     try {
         observed.push(await inspect(0, workload.stops[0]));
         for (let index = 1; index < workload.stops.length; index++) {
@@ -233,6 +302,10 @@ export async function measureAutomaticDebuggerSteps(
                 requests,
                 context
             );
+            const closing = process.env.WASM_PROTOTYPE_CLOSING_ACTION;
+            if (closing === 'stepOver' || closing === 'continue') {
+                extendedActions.closingAction = await closeFinalPause(closing);
+            }
         }
         return { steps, observed, automaticUiOnly: !extendedEnabled, extendedActions };
     } catch (error) {

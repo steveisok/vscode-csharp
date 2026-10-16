@@ -110,6 +110,7 @@ export interface MachineConfig {
     allowUnvalidatedHost?: boolean;
     browserType: 'edge' | 'chrome';
     browserProfile?: string;
+    diagnosticLogging?: boolean;
 }
 export function verifiedConcordExecutable(config: MachineConfig, host: HostPlatform, manifest: SourceManifest): string {
     verifyAssets(config.paths.concordPublish, manifest.hosts[host.key].concord, manifest.cohortId, 'Concord');
@@ -230,6 +231,9 @@ export function loadMachineConfig(
     if (raw.allowUnvalidatedHost !== undefined && typeof raw.allowUnvalidatedHost !== 'boolean') {
         throw new Error('allowUnvalidatedHost must be boolean.');
     }
+    if (raw.diagnosticLogging !== undefined && typeof raw.diagnosticLogging !== 'boolean') {
+        throw new Error('diagnosticLogging must be boolean.');
+    }
     if (raw.browserType !== 'edge' && raw.browserType !== 'chrome') {
         throw new Error('browserType must be edge or chrome.');
     }
@@ -325,6 +329,7 @@ export function loadMachineConfig(
         allowUnvalidatedHost: raw.allowUnvalidatedHost === true,
         browserType: raw.browserType,
         ...(browserProfile ? { browserProfile } : {}),
+        ...(raw.diagnosticLogging === true ? { diagnosticLogging: true } : {}),
     };
 }
 export function sha256(file: string): string {

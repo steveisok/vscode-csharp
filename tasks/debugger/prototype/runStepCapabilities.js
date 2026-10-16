@@ -83,7 +83,7 @@ async function verifyCleanup(run, machine, children) {
     if (receipt.failures.length) throw Error(receipt.failures.join(' '));
 }
 function browserProfileRecord(machine) {
-    return machine.browserProfile
+    const record = machine.browserProfile
         ? {
               mode: 'shared-user-authorized',
               path: machine.browserProfile,
@@ -91,6 +91,9 @@ function browserProfileRecord(machine) {
                   'User-authorized deviation from the fresh-profile-per-run rule: a dedicated signed-in browser profile is reused because policy forces browser sign-in. Only logs, not profile data, are retained.',
           }
         : { mode: 'fresh-per-run' };
+    return machine.diagnosticLogging
+        ? { ...record, diagnosticLogging: 'DIAGNOSTIC run: proxy performance logging, Concord elapsedTiming, closing action; not a timing reference' }
+        : record;
 }
 async function waitReady(check, child, label) {
     const deadline = Date.now() + 20000;
@@ -352,6 +355,13 @@ async function runStepCapabilities(options) {
                     WASM_PROTOTYPE_MEASUREMENT_ENABLED: mode === 'steps' ? '1' : '0',
                     // User-directed extended actions: launch/break boundaries and UI caller inspection after the final stop.
                     WASM_PROTOTYPE_EXTENDED_ACTIONS: '1',
+                    WASM_PROTOTYPE_DIAGNOSTIC_LOGGING: machine.diagnosticLogging ? '1' : '0',
+                    // Diagnostic only: close the final pause so the proxy logs its epoch totals; session 5 of a timed batch uses Continue as a variant.
+                    WASM_PROTOTYPE_CLOSING_ACTION: !machine.diagnosticLogging
+                        ? 'none'
+                        : mode === 'steps' && index === 4
+                          ? 'continue'
+                          : 'stepOver',
                     WASM_PROTOTYPE_UI_PORT: String(machine.ports.ui),
                     WASM_PROTOTYPE_NODE: process.execPath,
                     WASM_PROTOTYPE_BROWSER: machine.executables.browser,
@@ -526,7 +536,9 @@ async function runStepCapabilities(options) {
                                 automaticUiImplicitEvaluationExcluded: false,
                                 implicitEvaluationPolicy:
                                     'Default UI formatting settings preserved; observe and report any automatic function evaluation separately.',
-                                adapterLogging: 'protocolMessages=true, other native diagnostics disabled',
+                                adapterLogging: machine.diagnosticLogging
+                                    ? 'DIAGNOSTIC: protocolMessages=true + logging.elapsedTiming=true; proxy WASMDBG_PERFORMANCE_LOGGING=1 (WASMDBG_LOGGING unset); closing unscored F10 (session 5 of steps: Continue) after the final stop. Not a timing reference.'
+                                    : 'protocolMessages=true, other native diagnostics disabled',
                                 browser: `${machine.browserType} headless=new, ${machine.browserProfile ? `DEVIATION: shared user-authorized signed-in profile ${machine.browserProfile} reused across runs` : 'new profile per run'}, default js-debug network cache disabled`,
                                 requestedBrowserWindowSize: '1280x900, actual viewport recorded in entry observation',
                                 requestSumsOverlap: true,

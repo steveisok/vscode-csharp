@@ -161,7 +161,10 @@ testPrototype('The selected browser workload attaches and completes its requeste
         launch.dotNetConfig = {
             ...launch.dotNetConfig,
             justMyCode: true,
-            logging: { diagnosticsLog: { protocolMessages: true } },
+            logging: {
+                diagnosticsLog: { protocolMessages: true },
+                ...(process.env.WASM_PROTOTYPE_DIAGNOSTIC_LOGGING === '1' ? { elapsedTiming: true } : {}),
+            },
         };
         launch.browserConfig = {
             ...launch.browserConfig,
