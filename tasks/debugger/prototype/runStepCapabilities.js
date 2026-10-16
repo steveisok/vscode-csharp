@@ -360,9 +360,11 @@ async function runStepCapabilities(options) {
                     // (a step after the caller-this func-eval hangs; user decision); Small session 5 of steps is the Continue variant.
                     WASM_PROTOTYPE_CLOSING_ACTION: !machine.diagnosticLogging
                         ? 'none'
-                        : selector === 'havit' || (mode === 'steps' && index === 4)
-                          ? 'continue'
-                          : 'stepOver',
+                        : selector === 'havit'
+                          ? (machine.havitClosingAction ?? 'continue')
+                          : mode === 'steps' && index === 4
+                            ? 'continue'
+                            : 'stepOver',
                     WASM_PROTOTYPE_UI_PORT: String(machine.ports.ui),
                     WASM_PROTOTYPE_NODE: process.execPath,
                     WASM_PROTOTYPE_BROWSER: machine.executables.browser,

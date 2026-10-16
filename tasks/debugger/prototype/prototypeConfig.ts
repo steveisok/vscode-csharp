@@ -111,6 +111,7 @@ export interface MachineConfig {
     browserType: 'edge' | 'chrome';
     browserProfile?: string;
     diagnosticLogging?: boolean;
+    havitClosingAction?: 'stepOver' | 'continue';
 }
 export function verifiedConcordExecutable(config: MachineConfig, host: HostPlatform, manifest: SourceManifest): string {
     verifyAssets(config.paths.concordPublish, manifest.hosts[host.key].concord, manifest.cohortId, 'Concord');
@@ -234,6 +235,13 @@ export function loadMachineConfig(
     if (raw.diagnosticLogging !== undefined && typeof raw.diagnosticLogging !== 'boolean') {
         throw new Error('diagnosticLogging must be boolean.');
     }
+    if (
+        raw.havitClosingAction !== undefined &&
+        raw.havitClosingAction !== 'stepOver' &&
+        raw.havitClosingAction !== 'continue'
+    ) {
+        throw new Error('havitClosingAction must be stepOver or continue.');
+    }
     if (raw.browserType !== 'edge' && raw.browserType !== 'chrome') {
         throw new Error('browserType must be edge or chrome.');
     }
@@ -330,6 +338,7 @@ export function loadMachineConfig(
         browserType: raw.browserType,
         ...(browserProfile ? { browserProfile } : {}),
         ...(raw.diagnosticLogging === true ? { diagnosticLogging: true } : {}),
+        ...(raw.havitClosingAction ? { havitClosingAction: raw.havitClosingAction as 'stepOver' | 'continue' } : {}),
     };
 }
 export function sha256(file: string): string {
