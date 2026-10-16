@@ -356,10 +356,11 @@ async function runStepCapabilities(options) {
                     // User-directed extended actions: launch/break boundaries and UI caller inspection after the final stop.
                     WASM_PROTOTYPE_EXTENDED_ACTIONS: '1',
                     WASM_PROTOTYPE_DIAGNOSTIC_LOGGING: machine.diagnosticLogging ? '1' : '0',
-                    // Diagnostic only: close the final pause so the proxy logs its epoch totals; session 5 of a timed batch uses Continue as a variant.
+                    // Diagnostic only: close the final pause so the proxy logs its epoch totals. Havit always uses Continue
+                    // (a step after the caller-this func-eval hangs; user decision); Small session 5 of steps is the Continue variant.
                     WASM_PROTOTYPE_CLOSING_ACTION: !machine.diagnosticLogging
                         ? 'none'
-                        : mode === 'steps' && index === 4
+                        : selector === 'havit' || (mode === 'steps' && index === 4)
                           ? 'continue'
                           : 'stepOver',
                     WASM_PROTOTYPE_UI_PORT: String(machine.ports.ui),
@@ -537,7 +538,7 @@ async function runStepCapabilities(options) {
                                 implicitEvaluationPolicy:
                                     'Default UI formatting settings preserved; observe and report any automatic function evaluation separately.',
                                 adapterLogging: machine.diagnosticLogging
-                                    ? 'DIAGNOSTIC: protocolMessages=true + logging.elapsedTiming=true; proxy WASMDBG_PERFORMANCE_LOGGING=1 (WASMDBG_LOGGING unset); closing unscored F10 (session 5 of steps: Continue) after the final stop. Not a timing reference.'
+                                    ? 'DIAGNOSTIC: protocolMessages=true + logging.elapsedTiming=true; proxy WASMDBG_PERFORMANCE_LOGGING=1 (WASMDBG_LOGGING unset); closing unscored action after the final stop: Small F10 (session 5 of steps: Continue), Havit Continue. Not a timing reference.'
                                     : 'protocolMessages=true, other native diagnostics disabled',
                                 browser: `${machine.browserType} headless=new, ${machine.browserProfile ? `DEVIATION: shared user-authorized signed-in profile ${machine.browserProfile} reused across runs` : 'new profile per run'}, default js-debug network cache disabled`,
                                 requestedBrowserWindowSize: '1280x900, actual viewport recorded in entry observation',
