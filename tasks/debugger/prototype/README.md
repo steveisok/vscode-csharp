@@ -58,6 +58,10 @@ The typed schema/validation is in [`prototypeConfig.ts`](prototypeConfig.ts). Th
 | `sourceMaps.small`, `sourceMaps.havit` | PDB build roots mapped to the verified local source roots |
 | `ports` | Distinct loopback Small/Havit/DAP/Electron-CDP ports |
 | `allowUnvalidatedHost` | Explicit experimental opt-in; never grants missing-host artifacts or claims acceptance |
+| `browserProfile` | Optional, default off. One dedicated browser user-data directory reused by every run (e.g. when policy forces browser sign-in). Recorded as a deviation; a warm cache becomes possible |
+| `extendedInspection` | Optional, default off. Records launch-to-stop, pause at `Debugger.Break` and per-stop automatic Locals, then after the final F10 stop clicks the caller frame and expands caller `this` through the Call Stack/Variables UI (Havit only). Departs from the normal-F10-only measurement scope; F10 samples are taken before these actions |
+| `diagnosticLogging` | Optional, default off. Sets `WASMDBG_PERFORMANCE_LOGGING=1` (removes `WASMDBG_LOGGING`) for the proxy and Concord `logging.elapsedTiming`; with `extendedInspection`, adds an unscored closing action. Diagnostic only, not a timing reference |
+| `havitClosingAction` | Optional (`stepOver` or `continue`, default `continue`): Havit closing action when both `diagnosticLogging` and `extendedInspection` are set |
 
 ### Artifact-cohort manifest contract (schema version 1)
 

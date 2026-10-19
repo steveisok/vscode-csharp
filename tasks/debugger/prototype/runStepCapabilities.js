@@ -354,11 +354,11 @@ async function runStepCapabilities(options) {
                     WASM_PROTOTYPE_ENTRY_ONLY: mode === 'entry' ? '1' : '0',
                     WASM_PROTOTYPE_MEASUREMENT_ENABLED: mode === 'steps' ? '1' : '0',
                     // User-directed extended actions: launch/break boundaries and UI caller inspection after the final stop.
-                    WASM_PROTOTYPE_EXTENDED_ACTIONS: '1',
+                    WASM_PROTOTYPE_EXTENDED_ACTIONS: machine.extendedInspection ? '1' : '0',
                     WASM_PROTOTYPE_DIAGNOSTIC_LOGGING: machine.diagnosticLogging ? '1' : '0',
                     // Diagnostic only: close the final pause so the proxy logs its epoch totals. Havit always uses Continue
                     // (a step after the caller-this func-eval hangs; user decision); Small session 5 of steps is the Continue variant.
-                    WASM_PROTOTYPE_CLOSING_ACTION: !machine.diagnosticLogging
+                    WASM_PROTOTYPE_CLOSING_ACTION: !(machine.diagnosticLogging && machine.extendedInspection)
                         ? 'none'
                         : selector === 'havit'
                           ? (machine.havitClosingAction ?? 'continue')
@@ -369,7 +369,7 @@ async function runStepCapabilities(options) {
                     WASM_PROTOTYPE_NODE: process.execPath,
                     WASM_PROTOTYPE_BROWSER: machine.executables.browser,
                     // Keep the browser profile under a short path; deep run paths exceed Windows MAX_PATH.
-                    WASM_PROTOTYPE_BROWSER_PROFILE: machine.browserProfile ?? path.join(profile, 'edge-profile'),
+                    WASM_PROTOTYPE_BROWSER_PROFILE: machine.browserProfile ?? path.join(profile, 'browser-profile'),
                     WASM_PROTOTYPE_BROWSER_TYPE: machine.browserType,
                 };
                 const testLaunch = {
@@ -514,10 +514,14 @@ async function runStepCapabilities(options) {
                             repetitionsRequested: repetitions,
                             supportedScenarioPassed: observed.status === 'passed',
                             definitions: {
-                                automaticUiOnly: false,
+                                automaticUiOnly: !machine.extendedInspection,
                                 explicitStackScopesVariablesRequests: 0,
-                                extendedInspectionDeparture:
-                                    'USER-DIRECTED departure from measurement.md: after the final F10 stop, the harness clicks the caller frame in Call Stack and expands caller this in Variables (UI-driven; VS Code issues the scopes/variables requests). Launch-to-stop and Debugger.Break boundaries are also recorded. F10 step samples are taken before these actions and are unchanged.',
+                                ...(machine.extendedInspection
+                                    ? {
+                                          extendedInspectionDeparture:
+                                              'USER-DIRECTED departure from measurement.md: after the final F10 stop, the harness clicks the caller frame in Call Stack and expands caller this in Variables (UI-driven; VS Code issues the scopes/variables requests). Launch-to-stop and Debugger.Break boundaries are also recorded. F10 step samples are taken before these actions and are unchanged.',
+                                      }
+                                    : {}),
                                 headlineMeasurementEnabled:
                                     mode === 'steps' && observed.status === 'passed',
                                 sampleAcceptance:
@@ -535,12 +539,14 @@ async function runStepCapabilities(options) {
                                 preCaptureQuiescenceMs: 300,
                                 inspectionTimeoutMs: 30000,
                                 untimedEntryDomResponseBoundMs: 10000,
-                                explicitManagedEvaluationOrObjectExpansionRequested: 'UI-driven caller this expansion after the final stop (user-directed); no explicit evaluation',
+                                explicitManagedEvaluationOrObjectExpansionRequested: machine.extendedInspection
+                                    ? 'UI-driven caller this expansion after the final stop (user-directed); no explicit evaluation'
+                                    : false,
                                 automaticUiImplicitEvaluationExcluded: false,
                                 implicitEvaluationPolicy:
                                     'Default UI formatting settings preserved; observe and report any automatic function evaluation separately.',
                                 adapterLogging: machine.diagnosticLogging
-                                    ? 'DIAGNOSTIC: protocolMessages=true + logging.elapsedTiming=true; proxy WASMDBG_PERFORMANCE_LOGGING=1 (WASMDBG_LOGGING unset); closing unscored action after the final stop: Small F10 (session 5 of steps: Continue), Havit Continue. Not a timing reference.'
+                                    ? `DIAGNOSTIC: protocolMessages=true + logging.elapsedTiming=true; proxy WASMDBG_PERFORMANCE_LOGGING=1 (WASMDBG_LOGGING unset); closing unscored action after the final stop: Small F10 (session 5 of steps: Continue), Havit ${machine.havitClosingAction ?? 'continue'}. Not a timing reference.`
                                     : 'protocolMessages=true, other native diagnostics disabled',
                                 browser: `${machine.browserType} headless=new, ${machine.browserProfile ? `DEVIATION: shared user-authorized signed-in profile ${machine.browserProfile} reused across runs` : 'new profile per run'}, default js-debug network cache disabled`,
                                 requestedBrowserWindowSize: '1280x900, actual viewport recorded in entry observation',

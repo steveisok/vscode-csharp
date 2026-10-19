@@ -70,9 +70,11 @@ function childEnvironment(config, run) {
     delete env.WASMDBG_ARTIFACT_DIR;
     delete env.DOTNET_WASM_DBI_CONTINUE_TRACE;
     // Diagnostic runs enable only the proxy's performance summary; general proxy logging stays off.
-    delete env.WASMDBG_LOGGING;
-    delete env.WASMDBG_PERFORMANCE_LOGGING;
-    if (config.diagnosticLogging) env.WASMDBG_PERFORMANCE_LOGGING = '1';
+    // Without the opt-in, the inherited environment is passed through unchanged, as before.
+    if (config.diagnosticLogging) {
+        delete env.WASMDBG_LOGGING;
+        env.WASMDBG_PERFORMANCE_LOGGING = '1';
+    }
     return env;
 }
 async function main() {
