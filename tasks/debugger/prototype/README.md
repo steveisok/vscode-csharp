@@ -62,6 +62,7 @@ The typed schema/validation is in [`prototypeConfig.ts`](prototypeConfig.ts). Th
 | `extendedInspection` | Optional, default off. Records launch-to-stop, pause at `Debugger.Break` and per-stop automatic Locals, then after the final F10 stop clicks the caller frame and expands caller `this` through the Call Stack/Variables UI (Havit only). Departs from the normal-F10-only measurement scope; F10 samples are taken before these actions |
 | `diagnosticLogging` | Optional, default off. Sets `WASMDBG_PERFORMANCE_LOGGING=1` (removes `WASMDBG_LOGGING`) for the proxy and Concord `logging.elapsedTiming`; with `extendedInspection`, adds an unscored closing action. Diagnostic only, not a timing reference |
 | `havitClosingAction` | Optional (`stepOver` or `continue`, default `continue`): Havit closing action when both `diagnosticLogging` and `extendedInspection` are set |
+| `workflowSequence` | Optional, default off. `"comparison"` runs the 16-row user workflow of the internal debugger performance comparison instead of the F10 sequence: launch and first user break, Load Locals scope, Expand Locals, Load call stack, Select caller frame, Load caller Locals, Expand caller `this`, resume to a second user break, repeat, final Step Over. Start/end events are inferred (see `comparisonWorkflow.ts`); workloads declare a `comparison` block and Small marks inapplicable rows. The capability identity records the workflow, so F10 and comparison capabilities never authorize each other |
 
 ### Artifact-cohort manifest contract (schema version 1)
 
