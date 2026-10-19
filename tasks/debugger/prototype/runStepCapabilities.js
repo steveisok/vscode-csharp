@@ -171,6 +171,8 @@ async function runStepCapabilities(options) {
         ].map(([name, file]) => [name, crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')])
     );
     cohort.sourceManifest = crypto.createHash('sha256').update(fs.readFileSync(machine.manifest)).digest('hex');
+    // A comparison-workflow capability must not authorize F10-mode timing (or vice versa); default identity unchanged.
+    if (machine.workflowSequence) cohort.workflowSequence = machine.workflowSequence;
     cohort.nativeWasmFiles = Object.fromEntries(
         nativeWasm.map((file) => [
             file,
@@ -354,11 +356,12 @@ async function runStepCapabilities(options) {
                     WASM_PROTOTYPE_ENTRY_ONLY: mode === 'entry' ? '1' : '0',
                     WASM_PROTOTYPE_MEASUREMENT_ENABLED: mode === 'steps' ? '1' : '0',
                     // User-directed extended actions: launch/break boundaries and UI caller inspection after the final stop.
-                    WASM_PROTOTYPE_EXTENDED_ACTIONS: machine.extendedInspection ? '1' : '0',
+                    WASM_PROTOTYPE_EXTENDED_ACTIONS: machine.extendedInspection && !machine.workflowSequence ? '1' : '0',
+                    WASM_PROTOTYPE_WORKFLOW: machine.workflowSequence ?? 'f10',
                     WASM_PROTOTYPE_DIAGNOSTIC_LOGGING: machine.diagnosticLogging ? '1' : '0',
                     // Diagnostic only: close the final pause so the proxy logs its epoch totals. Havit always uses Continue
                     // (a step after the caller-this func-eval hangs; user decision); Small session 5 of steps is the Continue variant.
-                    WASM_PROTOTYPE_CLOSING_ACTION: !(machine.diagnosticLogging && machine.extendedInspection)
+                    WASM_PROTOTYPE_CLOSING_ACTION: !(machine.diagnosticLogging && machine.extendedInspection) || machine.workflowSequence
                         ? 'none'
                         : selector === 'havit'
                           ? (machine.havitClosingAction ?? 'continue')
@@ -415,7 +418,10 @@ async function runStepCapabilities(options) {
                     if (attach.stepCapabilitiesCheckPassed !== true || attach.failure)
                         throw Error('Automatic step capability did not pass.');
                     runSamples = result.steps;
-                    const expectedSteps = workload.stops.length - 1 - (workload.preparationTransitions ?? 0);
+                    // The comparison workflow scores one final Step Over in F10-compatible form; its other actions are in result.comparison.
+                    const expectedSteps = machine.workflowSequence
+                        ? 1
+                        : workload.stops.length - 1 - (workload.preparationTransitions ?? 0);
                     if (runSamples.length !== expectedSteps || result.measurementEnabled !== (mode === 'steps')) {
                         throw Error('Automatic step capture is incomplete or has the wrong measurement mode.');
                     }
@@ -514,7 +520,13 @@ async function runStepCapabilities(options) {
                             repetitionsRequested: repetitions,
                             supportedScenarioPassed: observed.status === 'passed',
                             definitions: {
-                                automaticUiOnly: !machine.extendedInspection,
+                                automaticUiOnly: !machine.extendedInspection && !machine.workflowSequence,
+                                ...(machine.workflowSequence
+                                    ? {
+                                          workflowSequence:
+                                              'comparison: launch, user break, Load Locals scope, Expand Locals, Load call stack, Select caller frame, Load caller Locals, Expand caller this, Resume to second break, repeat, final Step Over (UI clicks; inferred start/end events, see automatic-step-results.json comparison.definitions).',
+                                      }
+                                    : {}),
                                 explicitStackScopesVariablesRequests: 0,
                                 ...(machine.extendedInspection
                                     ? {
@@ -539,9 +551,11 @@ async function runStepCapabilities(options) {
                                 preCaptureQuiescenceMs: 300,
                                 inspectionTimeoutMs: 30000,
                                 untimedEntryDomResponseBoundMs: 10000,
-                                explicitManagedEvaluationOrObjectExpansionRequested: machine.extendedInspection
-                                    ? 'UI-driven caller this expansion after the final stop (user-directed); no explicit evaluation'
-                                    : false,
+                                explicitManagedEvaluationOrObjectExpansionRequested: machine.workflowSequence
+                                    ? 'UI-driven top-frame local and caller this expansion at each user break (comparison workflow); no explicit evaluation'
+                                    : machine.extendedInspection
+                                      ? 'UI-driven caller this expansion after the final stop (user-directed); no explicit evaluation'
+                                      : false,
                                 automaticUiImplicitEvaluationExcluded: false,
                                 implicitEvaluationPolicy:
                                     'Default UI formatting settings preserved; observe and report any automatic function evaluation separately.',

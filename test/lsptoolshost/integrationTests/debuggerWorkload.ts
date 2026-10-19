@@ -43,6 +43,60 @@ export interface DebuggerWorkload {
         forbiddenLocals?: string[];
         thisMember?: string;
     };
+    comparison?: ComparisonWorkflow;
+}
+
+/** Opt-in comparison workflow: user breaks, per-break inspection, resume between breaks, final Step Over. */
+export interface ComparisonBreak extends DebuggerStopExpectation {
+    expandLocal?: { variable: string; child: string };
+    caller?: {
+        frameName: string;
+        callerLocals: string[];
+        callerLocalContains?: Record<string, string>;
+        forbiddenLocals?: string[];
+        thisMember: string;
+        expectFragmentUrl?: boolean;
+    };
+}
+export interface ComparisonWorkflow {
+    breaks: ComparisonBreak[];
+    stepOverTo: DebuggerStopExpectation;
+    notApplicable?: Record<string, string>;
+}
+
+export function parseComparisonWorkflow(value: unknown): ComparisonWorkflow {
+    const config = value as Partial<ComparisonWorkflow> | undefined;
+    const stop = (s: unknown, label: string) => {
+        const e = s as Partial<DebuggerStopExpectation> | undefined;
+        if (
+            !e ||
+            typeof e.sourceSuffix !== 'string' ||
+            !Number.isInteger(e.line) ||
+            !Array.isArray(e.localNames) ||
+            !e.localNames.length
+        ) {
+            throw new Error(`Comparison workflow ${label} requires source, line and baseline local names.`);
+        }
+    };
+    if (!config || !Array.isArray(config.breaks) || config.breaks.length < 1 || config.breaks.length > 2) {
+        throw new Error('Comparison workflow requires one or two user breaks.');
+    }
+    config.breaks.forEach((b, index) => {
+        stop(b, `break ${index + 1}`);
+        if (b.expandLocal && (typeof b.expandLocal.variable !== 'string' || typeof b.expandLocal.child !== 'string')) {
+            throw new Error('expandLocal requires variable and child names.');
+        }
+        if (
+            b.caller &&
+            (typeof b.caller.frameName !== 'string' ||
+                !Array.isArray(b.caller.callerLocals) ||
+                typeof b.caller.thisMember !== 'string')
+        ) {
+            throw new Error('caller requires frameName, callerLocals and thisMember.');
+        }
+    });
+    stop(config.stepOverTo, 'stepOverTo');
+    return config as ComparisonWorkflow;
 }
 
 export function parseDebuggerWorkload(value: unknown): DebuggerWorkload {
