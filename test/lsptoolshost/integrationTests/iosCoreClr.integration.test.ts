@@ -21,6 +21,52 @@ const testIos = prototypeDirectory && process.env.IOS_PROTOTYPE_DEVICE ? test : 
 const managedSessionTypes = new Set(['coreclr_mobile', 'monovsdbg', 'coreclr']);
 const LAUNCH_BOUND_MS = Number(process.env.IOS_PROTOTYPE_LAUNCH_BOUND_MS ?? 600000);
 
+// Records visible workbench notifications and a screenshot over the owned workbench CDP port (diagnostic only).
+async function captureWorkbenchNotifications(output: string) {
+    try {
+        const port = process.env.WASM_PROTOTYPE_UI_PORT;
+        const targets = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()) as {
+            type: string;
+            url: string;
+            webSocketDebuggerUrl: string;
+        }[];
+        const target = targets.find((t) => t.type === 'page' && t.url.includes('workbench'));
+        if (!target) {
+            throw new Error('workbench target not found');
+        }
+        const socket = new WebSocket(target.webSocketDebuggerUrl);
+        await new Promise((resolve, reject) => {
+            socket.addEventListener('open', resolve, { once: true });
+            socket.addEventListener('error', reject, { once: true });
+        });
+        let id = 0;
+        const send = (method: string, params: object = {}) =>
+            new Promise<any>((resolve) => {
+                const current = ++id;
+                const listener = (event: MessageEvent) => {
+                    const message = JSON.parse(String(event.data));
+                    if (message.id === current) {
+                        socket.removeEventListener('message', listener);
+                        resolve(message.result);
+                    }
+                };
+                socket.addEventListener('message', listener);
+                socket.send(JSON.stringify({ id: current, method, params }));
+            });
+        const notifications = await send('Runtime.evaluate', {
+            expression:
+                "JSON.stringify([...document.querySelectorAll('.notification-list-item')].map(e => e.innerText))",
+            returnByValue: true,
+        });
+        const image = await send('Page.captureScreenshot', { format: 'png', fromSurface: true });
+        fs.writeFileSync(`${output}.json`, JSON.stringify({ notifications: JSON.parse(notifications.result.value) }, null, 2));
+        fs.writeFileSync(`${output}.png`, Buffer.from(image.data, 'base64'));
+        socket.close();
+    } catch (error) {
+        fs.writeFileSync(`${output}.json`, JSON.stringify({ captureFailure: String(error) }, null, 2));
+    }
+}
+
 testIos(
     'The iOS Simulator workload launches through the .NET MAUI extension and completes its debugger scenario',
     async () => {
@@ -42,13 +88,32 @@ testIos(
         const sessions: { id: string; type: string; name: string; startedAt: number; configuration: unknown }[] = [];
         const tasks: { name: string; event: string; at: number; exitCode?: number }[] = [];
         const disposables: vscode.Disposable[] = [];
+        const lifecycle: { event: string; type: string; session: string; at: number; detail?: unknown }[] = [];
         let failure: string | undefined;
         let launchStartedAt: number | undefined;
         let stepCapabilitiesCheckPassed = false;
         let automaticSteps: Awaited<ReturnType<typeof measureAutomaticDebuggerSteps>> | undefined;
         let managedSessionId: string | undefined;
 
+        // Passive observer: records each configuration-resolution stage; returns every configuration unchanged.
+        const resolutions: { stage: string; type: unknown; at: number; keys: string[]; coreClrMobileDebuggerOptions?: unknown; program?: unknown }[] = [];
+        const observe = (stage: string, configuration: vscode.DebugConfiguration) => {
+            resolutions.push({
+                stage,
+                type: configuration?.type,
+                at: performance.now(),
+                keys: Object.keys(configuration ?? {}).sort(),
+                coreClrMobileDebuggerOptions: configuration?.coreClrMobileDebuggerOptions,
+                program: configuration?.program,
+            });
+            return configuration;
+        };
         disposables.push(
+            vscode.debug.registerDebugConfigurationProvider('*', {
+                resolveDebugConfiguration: (_folder, configuration) => observe('resolve', configuration),
+                resolveDebugConfigurationWithSubstitutedVariables: (_folder, configuration) =>
+                    observe('resolveWithSubstitutedVariables', configuration),
+            }),
             vscode.debug.onDidStartDebugSession((session) =>
                 sessions.push({
                     id: session.id,
@@ -64,10 +129,23 @@ testIos(
             vscode.tasks.onDidEndTaskProcess((e) =>
                 tasks.push({ name: e.execution.task.name, event: 'end', at: performance.now(), exitCode: e.exitCode })
             ),
+            vscode.debug.onDidTerminateDebugSession((session) =>
+                lifecycle.push({ event: 'didTerminateSession', type: session.type, session: session.id, at: performance.now() })
+            ),
             vscode.debug.registerDebugAdapterTrackerFactory('*', {
                 createDebugAdapterTracker(session) {
+                    const note = (event: string, detail?: unknown) =>
+                        lifecycle.push({ event, type: session.type, session: session.id, at: performance.now(), detail });
+                    note('createTracker');
+                    const lifecycleHooks = {
+                        onWillStartSession: () => note('willStartSession'),
+                        onWillStopSession: () => note('willStopSession'),
+                        onExit: (code: number | undefined, signal: string | undefined) => note('adapterExit', { code, signal }),
+                    };
                     if (!managedSessionTypes.has(session.type)) {
                         return {
+                            ...lifecycleHooks,
+                            onError: (error: Error) => note('adapterError', String(error)),
                             onDidSendMessage(message) {
                                 otherMessages.push({ session: session.id, type: session.type, message, at: performance.now() });
                             },
@@ -107,7 +185,9 @@ testIos(
                                 console.log('IOS CORECLR DAP: ' + JSON.stringify(message));
                             }
                         },
+                        ...lifecycleHooks,
                         onError(error) {
+                            note('adapterError', String(error));
                             failure = error.message;
                         },
                     };
@@ -141,9 +221,50 @@ testIos(
             if (!workspace || workspace.uri.fsPath !== path.join(stage, workload.workspace)) {
                 throw new Error(`Unexpected workspace ${workspace?.uri.fsPath}.`);
             }
-            // The project system needs time to load before the MAUI provider can resolve the startup project.
-            const projectSettle = Number(process.env.IOS_PROTOTYPE_PROJECT_SETTLE_MS ?? 20000);
+            // Untimed readiness: the MAUI provider resolves the startup project from C# Dev Kit's project query, so wait
+            // for this run's own Dev Kit log to report the query complete (bounded; failure is preserved, not retried).
+            const profile = process.env.IOS_PROTOTYPE_PROFILE;
+            if (!profile) {
+                throw new Error('IOS_PROTOTYPE_PROFILE is required for the project-load readiness gate.');
+            }
+            const findDevKitLog = (directory: string): string | undefined => {
+                for (const entry of fs.existsSync(directory) ? fs.readdirSync(directory, { withFileTypes: true }) : []) {
+                    const file = path.join(directory, entry.name);
+                    if (entry.isDirectory()) {
+                        const found = findDevKitLog(file);
+                        if (found) {
+                            return found;
+                        }
+                    } else if (entry.name === 'C# Dev Kit.log') {
+                        return file;
+                    }
+                }
+                return undefined;
+            };
+            const projectReadyBound = Number(process.env.IOS_PROTOTYPE_PROJECT_READY_BOUND_MS ?? 300000);
+            const projectReadyDeadline = Date.now() + projectReadyBound;
+            let projectReadyAt: number | undefined;
+            while (Date.now() < projectReadyDeadline) {
+                const log = findDevKitLog(path.join(profile, 'logs'));
+                if (log && fs.readFileSync(log, 'utf8').includes('Completed: Query for all projects')) {
+                    projectReadyAt = performance.now();
+                    break;
+                }
+                await new Promise((resolve) => setTimeout(resolve, 250));
+            }
+            if (projectReadyAt === undefined) {
+                throw new Error(`C# Dev Kit did not complete its project query within ${projectReadyBound} ms.`);
+            }
+            const projectSettle = Number(process.env.IOS_PROTOTYPE_PROJECT_SETTLE_MS ?? 5000);
             await new Promise((resolve) => setTimeout(resolve, projectSettle));
+            fs.writeFileSync(
+                path.join(run, 'project-readiness.json'),
+                JSON.stringify(
+                    { gate: 'C# Dev Kit log: Completed: Query for all projects', untimed: true, projectSettleMsAfterGate: projectSettle, boundMs: projectReadyBound },
+                    null,
+                    2
+                )
+            );
             const launch = {
                 type: 'maui',
                 request: 'launch',
@@ -157,7 +278,11 @@ testIos(
             };
             fs.writeFileSync(path.join(run, 'maui-launch-configuration.json'), JSON.stringify(launch, null, 2));
             launchStartedAt = performance.now();
-            expect(await vscode.debug.startDebugging(workspace, launch)).toBe(true);
+            const started = await vscode.debug.startDebugging(workspace, launch);
+            if (!started) {
+                await captureWorkbenchNotifications(path.join(run, 'start-debugging-false'));
+            }
+            expect(started).toBe(true);
 
             const deadline = Date.now() + LAUNCH_BOUND_MS;
             while (Date.now() < deadline) {
@@ -241,6 +366,14 @@ testIos(
                                       managedSessionToFirstStopMs:
                                           managed && stopTimes.length ? stopTimes[0] - managed.startedAt : undefined,
                                   },
+                        sessionLifecycle: lifecycle.map((l) => ({
+                            ...l,
+                            atMs: launchStartedAt === undefined ? undefined : l.at - launchStartedAt,
+                        })),
+                        configurationResolutions: resolutions.map((r) => ({
+                            ...r,
+                            atMs: launchStartedAt === undefined ? undefined : r.at - launchStartedAt,
+                        })),
                         tasks: tasks.map((t) => ({ ...t, atMs: launchStartedAt === undefined ? undefined : t.at - launchStartedAt })),
                         timedRequests,
                         messages,

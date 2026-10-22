@@ -41,7 +41,7 @@ function loadIosConfig(filename) {
     const tokens = { configDir, home: os.homedir() };
     const resolve = (value) => path.resolve(configDir, expand(value, tokens));
     const config = { ...raw, configFile: path.resolve(filename) };
-    for (const key of ['extensionRoot', 'artifactRoot', 'profileRoot']) {
+    for (const key of ['extensionRoot', 'artifactRoot', 'profileRoot', 'stageRoot']) {
         config[key] = resolve(raw[key]);
         tokens[key] = config[key];
     }
@@ -112,8 +112,10 @@ function cohortInventory(config, stage) {
     return inventory;
 }
 function stageIos(config) {
-    fs.mkdirSync(config.artifactRoot, { recursive: true });
-    const stage = path.join(config.artifactRoot, `stage-ios-${config.cohort}-${crypto.randomUUID()}`);
+    // Stage under a short root: the shipped vsdbg-ui fails to initialize CoreCLR (8ede002b) once its
+    // .debugger/<arch> directory path reaches 178 characters (file paths past ~255). Results stay in artifactRoot.
+    fs.mkdirSync(config.stageRoot, { recursive: true });
+    const stage = path.join(config.stageRoot, `s-${config.cohort}-${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`);
     fs.mkdirSync(stage);
     // Isolated extensions copy; the user's VS Code extensions are never modified.
     const extensions = path.join(stage, 'extensions');
@@ -127,6 +129,16 @@ function stageIos(config) {
         list.push({ ...entry, location: { $mid: 1, path: path.join(extensions, entry.relativeLocation), scheme: 'file' } });
     }
     fs.writeFileSync(path.join(extensions, 'extensions.json'), JSON.stringify(list));
+    const longest = (directory) =>
+        fs.readdirSync(directory, { withFileTypes: true }).reduce((max, entry) => {
+            const file = path.join(directory, entry.name);
+            return Math.max(max, entry.isDirectory() && !entry.isSymbolicLink() ? longest(file) : file.length);
+        }, directory.length);
+    const longestPath = longest(path.join(extensionFolder(extensions, CSHARP), '.debugger'));
+    if (longestPath > 255) throw Error(`Staged vsdbg path length ${longestPath} exceeds 255; use a shorter stageRoot.`);
+    // C# Dev Kit caches absolute component paths in its own folder; a copied cache would run the user's binaries.
+    const devKitCache = path.join(extensionFolder(extensions, 'ms-dotnettools.csdevkit'), 'cache');
+    fs.rmSync(devKitCache, { recursive: true, force: true });
     const resources = mauiResources(extensions);
     const swaps = [];
     if (config.cohort === 'built') {
@@ -185,7 +197,7 @@ function stageIos(config) {
     );
     fs.writeFileSync(
         path.join(stage, 'stage-manifest.json'),
-        JSON.stringify({ cohort: config.cohort, swaps, createdAt: new Date().toISOString(), cloneCopies: true, noSymlinks: true }, null, 2)
+        JSON.stringify({ cohort: config.cohort, swaps, longestStagedDebuggerPath: longestPath, createdAt: new Date().toISOString(), cloneCopies: true, noSymlinks: true }, null, 2)
     );
     return stage;
 }
@@ -249,8 +261,13 @@ function createProfile(config) {
                 'update.mode': 'none',
                 'security.workspace.trust.enabled': false,
                 'chat.disableAIFeatures': true,
+                // Diagnostic MAUI output (build binlog) and launch.json values honored; no XAML tooling for this non-XAML app.
+                'maui.configuration.logVerbosity': 'diagnostic',
+                'maui.configuration.debugVerbosity': 'diagnostic',
+                'maui.configuration.useLaunchJsonConfigurations': true,
+                'dotnet.debug.hotReloadXAML': false,
                 // The VS Code process resolves the login-shell PATH, so select the isolated SDK explicitly.
-                'dotnetAcquisitionExtension.existingDotnetPath': ['ms-dotnettools.csdevkit', 'ms-dotnettools.dotnet-maui'].map(
+                'dotnetAcquisitionExtension.existingDotnetPath': ['ms-dotnettools.csharp', 'ms-dotnettools.csdevkit', 'ms-dotnettools.dotnet-maui'].map(
                     (extensionId) => ({ extensionId, path: config.executables.dotnet })
                 ),
                 ...(config.vscodeSettings ?? {}),
@@ -305,6 +322,32 @@ function hashAppBundle(stage) {
     return { present: true, files, commits };
 }
 
+function ownedGroupMembers(groups) {
+    const ps = spawnSync('ps', ['-ax', '-o', 'pid=,pgid='], { encoding: 'utf8' });
+    return ps.stdout
+        .split('\n')
+        .map((line) => line.trim().split(/\s+/))
+        .filter(([pid, pgid]) => pid && groups.has(pgid) && Number(pid) !== process.pid)
+        .map(([pid]) => Number(pid));
+}
+async function stopOwnedGroupMembers(groups) {
+    const record = { signalled: [], errors: [], remaining: [] };
+    for (const signal of ['SIGTERM', 'SIGKILL']) {
+        for (const pid of ownedGroupMembers(groups)) {
+            try {
+                process.kill(pid, signal);
+                record.signalled.push({ pid, signal });
+            } catch (error) {
+                if (error.code !== 'ESRCH') record.errors.push({ pid, signal, error: String(error) });
+            }
+        }
+        const deadline = Date.now() + 10000;
+        while (ownedGroupMembers(groups).length && Date.now() < deadline) await new Promise((r) => setTimeout(r, 200));
+        if (!ownedGroupMembers(groups).length) break;
+    }
+    record.remaining = ownedGroupMembers(groups);
+    return record;
+}
 async function runIos(options) {
     const { config, repetitions, mode } = options;
     const R = reports();
@@ -396,6 +439,7 @@ async function runIos(options) {
                     WASM_PROTOTYPE_UI_PORT: String(config.ports.ui),
                     WASM_PROTOTYPE_NODE: process.execPath,
                     IOS_PROTOTYPE_DEVICE: config.simulator.udid,
+                    IOS_PROTOTYPE_PROFILE: profile,
                     ...(config.projectSettleMs ? { IOS_PROTOTYPE_PROJECT_SETTLE_MS: String(config.projectSettleMs) } : {}),
                 };
                 const testLaunch = {
@@ -417,6 +461,7 @@ async function runIos(options) {
                         profile,
                         '--extensions-dir',
                         path.join(stage, 'extensions'),
+                        ...(mode === 'capability' ? ['--log', 'trace'] : []),
                     ],
                     extensionTestsEnv: testEnv,
                 };
@@ -464,16 +509,36 @@ async function runIos(options) {
                     path.join(run, 'owned-group-before-cleanup.txt'),
                     ps.stdout.split('\n').filter((line) => groups.has(line.trim().split(/\s+/)[1])).join('\n')
                 );
+                const userExtensionsPrefix = path.join(os.homedir(), '.vscode', 'extensions') + path.sep;
+                const leaked = fs
+                    .readFileSync(path.join(run, 'owned-group-before-cleanup.txt'), 'utf8')
+                    .split('\n')
+                    .filter((line) => line.includes(userExtensionsPrefix));
+                if (leaked.length) {
+                    fs.writeFileSync(path.join(run, 'isolation-failure.txt'), leaked.join('\n'));
+                    runReport.status = 'failed';
+                    runReport.failure ??= 'Isolation failure: an owned process ran from the user VS Code extensions directory.';
+                    batchReport.failure ??= runReport.failure;
+                    suiteFailed = true;
+                }
                 try {
                     await owned.stop();
                 } catch (error) {
-                    // Known deferred limitation (as in the browser runner): preserve, mark failed, keep retaining evidence.
-                    cleanupFailure = String(error);
-                    fs.writeFileSync(path.join(run, 'owned-cleanup-failure.txt'), cleanupFailure);
-                    runReport.status = 'failed';
-                    runReport.failure ??= cleanupFailure;
-                    batchReport.failure ??= cleanupFailure;
-                    suiteFailed = true;
+                    // The process-group signal can fail with EPERM after the leader exits (as in the browser runner).
+                    // Preserve it, then stop each remaining member of our own group individually and verify.
+                    const groupError = String(error);
+                    const memberCleanup = await stopOwnedGroupMembers(groups);
+                    fs.writeFileSync(
+                        path.join(run, 'owned-cleanup-failure.txt'),
+                        JSON.stringify({ groupSignalError: groupError, memberCleanup }, null, 2)
+                    );
+                    if (memberCleanup.remaining.length || memberCleanup.errors.length) {
+                        cleanupFailure = `${groupError}; remaining owned group members: ${JSON.stringify(memberCleanup)}`;
+                        runReport.status = 'failed';
+                        runReport.failure ??= cleanupFailure;
+                        batchReport.failure ??= cleanupFailure;
+                        suiteFailed = true;
+                    }
                 } finally {
                     owned.dispose();
                 }
