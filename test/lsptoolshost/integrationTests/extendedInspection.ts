@@ -79,11 +79,14 @@ export function launchAndBreakTimings(
         .slice(0, stopIndex)
         .filter(({ message }) => message.type === 'event' && message.event === 'module')
         .pop();
+    const breakSite = `${workload.stops[0].sourceSuffix}:${workload.stops[0].line}`;
     return {
         launch,
         pauseAtDebuggerBreak: {
             definition:
-                'managed configurationDone request sent (runtime resumes startup; Main runs Debugger.Break during startup) -> managed stopped event at Program.cs:15',
+                workload.id === 'ios'
+                    ? `managed configurationDone request sent (the simulator app resumes startup; FinishedLaunching dispatches the workload that runs Debugger.Break) -> managed stopped event at ${breakSite}`
+                    : `managed configurationDone request sent (runtime resumes startup; Main runs Debugger.Break during startup) -> managed stopped event at ${breakSite}`,
             configurationDoneToStopMs: stopAt - configurationDone.startedAt,
             supplementaryLastModuleEventToStopMs: lastModule?.at === undefined ? undefined : stopAt - lastModule.at,
             supplementaryDefinition:
@@ -92,7 +95,7 @@ export function launchAndBreakTimings(
     };
 }
 
-/** Havit-only caller inspection at the final stop, driven through the Call Stack/Variables UI. */
+/** Caller inspection at the final stop (Havit, iOS), driven through the Call Stack/Variables UI. */
 export async function callerInspectionSequence(
     workload: DebuggerWorkload,
     prototype: string,
@@ -203,7 +206,7 @@ export async function callerInspectionSequence(
         },
         loadCallerLocals: {
             definition:
-                'same click -> Variables view shows caller Locals (this, url, pageKey; no top-frame hashIndex) (first poll), stable 300 ms',
+                `same click -> Variables view shows caller Locals (${spec.callerLocals!.join(', ')}; no top-frame ${(spec.forbiddenLocals ?? []).join(', ') || 'locals'}) (first poll), stable 300 ms`,
             actionToVisibleMs: visible(select, 'callerLocalsVisible'),
             actionToDapVariablesMs:
                 locals.request?.finishedAt === undefined ? undefined : locals.request.finishedAt - select.actionAt,

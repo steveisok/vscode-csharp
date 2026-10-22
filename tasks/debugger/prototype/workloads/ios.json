@@ -1,0 +1,25 @@
+{
+    "id": "ios",
+    "scenario": "ios-simulator-coreclr-order-processor",
+    "workspace": "workspace",
+    "handoff": "workspace/runtime-handoff.json",
+    "assembly": "IosDebuggee",
+    "profile": "Debug app, Release CoreCLR iossimulator-arm64 runtime pack (interpreter), MAUI extension F5",
+    "launch": {
+        "type": "maui",
+        "project": "IosDebuggee/IosDebuggee.csproj",
+        "configuration": "Debug",
+        "targetFramework": "net11.0-ios"
+    },
+    "extendedInspection": {
+        "callerFrameName": "OrderProcessor.ProcessOrders",
+        "callerLocals": ["this", "label", "total"],
+        "forbiddenLocals": ["subtotal", "discount"],
+        "thisMember": "_prices"
+    },
+    "stops": [
+        { "sourceSuffix": "OrderProcessor.cs", "line": 32, "localNames": ["quantity", "unitPrice", "subtotal", "discount"], "localValues": { "quantity": "12", "unitPrice": "1.25" } },
+        { "sourceSuffix": "OrderProcessor.cs", "line": 33, "localNames": ["quantity", "unitPrice", "subtotal", "discount"], "localValues": { "quantity": "12", "unitPrice": "1.25" } },
+        { "sourceSuffix": "OrderProcessor.cs", "line": 34, "localNames": ["quantity", "unitPrice", "subtotal", "discount"], "localValues": { "subtotal": "15.00" } }
+    ]
+}

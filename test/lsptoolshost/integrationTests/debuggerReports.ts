@@ -58,6 +58,12 @@ Inspection has a 30s failure bound, 300ms quiescence and 25ms observation pollin
 
 The earlier async grid-filtering 63->65 stall remains unresolved/deferred. The old proxy reply-loss interleaving is not proven. In the last accepted matched baseline, scoped logs had no known close-error matches, but graceful native listener exit was not established (the owned wrapper stops it); generic VS Code console errors remain in raw logs. Future outcomes must be read from each run's own evidence. These are baseline capabilities, not general breakpoint/object-expansion/evaluation reliability claims.`;
 
+export const iosMeasurementNotes = `iOS Simulator arm64 CoreCLR workload (OrderProcessor.ComputeLineTotal Debugger.Break at line 32, Step Over 32->33->34; caller OrderProcessor.ProcessOrders with this/label/total). The .NET MAUI extension F5 flow builds, installs and launches the app; the shipped C# extension vsdbg debugs it through the cohort's vsdbgremotecoreclrhost (osx-arm64) and vsdbgremotecoreclrtarget (iossimulator-arm64). Launch includes the MAUI incremental build, simulator install/launch and app startup.
+
+Automatic Call Stack/scopes/baseline Locals only for F10 steps; workflow-mode caller actions use real mouse input on the existing views after the final F10 stop. Default JMC and implicit evaluation remain enabled.
+
+Inspection has a 30s failure bound, 300ms quiescence and 25ms observation polling. Visible refresh includes polling, quiescence and capture overhead, not pure paint. Small bounded samples have no p95 claim. Failed runs are retained and excluded from distributions.`;
+
 function safeToken(value: string): string {
     if (!/^[a-zA-Z0-9-]+$/.test(value)) {
         throw new Error(`Invalid report identity token: ${value}`);
@@ -269,7 +275,7 @@ ${metadata.links.map((link) => `- [${link.label}](${link.path})`).join('\n')}
 
 ## Definitions and limitations
 
-${measurementNotes}
+${metadata.workload.startsWith('ios') ? iosMeasurementNotes : measurementNotes}
 `;
 }
 

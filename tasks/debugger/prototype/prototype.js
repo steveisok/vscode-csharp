@@ -24,6 +24,22 @@ function parseArguments(args) {
     const filename = path.resolve(args[position + 1]);
     const rest = [...args.slice(0, position), ...args.slice(position + 2)];
     const [command, selector, repetitions, mode] = rest;
+    if (selector === 'ios') {
+        // iOS Simulator workload: its own machine config and runner (tasks/debugger/prototype/ios).
+        if (command === 'setup' && rest.length === 2) return { command, selector, filename };
+        if (
+            command === 'run' &&
+            rest.length === 4 &&
+            Number.isInteger(Number(repetitions)) &&
+            Number(repetitions) >= 1 &&
+            Number(repetitions) <= 5 &&
+            ['steps', 'capability'].includes(mode) &&
+            (mode === 'steps' || repetitions === '1')
+        ) {
+            return { command, selector, repetitions: Number(repetitions), mode, filename };
+        }
+        throw Error('iOS accepts: setup ios, or run ios <1..5> <steps|capability> (capability requires 1).');
+    }
     if (!['preflight', 'setup', 'open', 'run'].includes(command)) throw Error('Use preflight, setup, open, or run.');
     if (command === 'preflight' || command === 'setup') {
         if (rest.length !== 1) throw Error('preflight/setup accept only --config.');
@@ -79,6 +95,16 @@ function childEnvironment(config, run) {
 }
 async function main() {
     const args = parseArguments(process.argv.slice(2));
+    if (args.selector === 'ios') {
+        const { loadIosConfig, stageIos, runIos } = require('./ios/runIos.js');
+        const config = loadIosConfig(args.filename);
+        if (args.command === 'setup') {
+            console.log(`Complete isolated iOS stage: ${stageIos(config)}. No helper was launched.`);
+            return;
+        }
+        await runIos({ config, repetitions: args.repetitions, mode: args.mode });
+        return;
+    }
     const host = hostPlatform(process.platform, process.arch);
     const config = loadMachineConfig(args.filename, host);
     const manifest = preflight(config, host);

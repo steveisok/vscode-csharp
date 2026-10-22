@@ -13,11 +13,12 @@ export interface DebuggerStopExpectation {
 }
 
 export interface DebuggerWorkload {
-    id: 'small' | 'havit';
+    id: 'small' | 'havit' | 'ios';
     workspace: string;
     handoff: string;
     assembly: string;
-    url: string;
+    // Browser workloads only; the iOS workload is launched by the .NET MAUI extension instead.
+    url?: string;
     scenario?: string;
     stops: DebuggerStopExpectation[];
     preparationTransitions?: number;
@@ -34,6 +35,8 @@ export interface DebuggerWorkload {
         expectedRows?: string[];
     };
     server?: { command: string; args: string[] };
+    // iOS only: the .NET MAUI extension launch configuration (project is relative to the staged workspace).
+    launch?: { type: 'maui'; project: string; configuration: string; targetFramework: string };
     extendedInspection?: {
         notApplicable?: boolean;
         notApplicableReason?: string;
@@ -50,10 +53,11 @@ export function parseDebuggerWorkload(value: unknown): DebuggerWorkload {
         throw new Error('Debugger workload must be an object.');
     }
     const config = value as Partial<DebuggerWorkload>;
-    if (config.id !== 'small' && config.id !== 'havit') {
-        throw new Error('Select small or havit.');
+    if (config.id !== 'small' && config.id !== 'havit' && config.id !== 'ios') {
+        throw new Error('Select small, havit or ios.');
     }
-    for (const field of ['workspace', 'handoff', 'assembly', 'url'] as const) {
+    const required = config.id === 'ios' ? (['workspace', 'handoff', 'assembly'] as const) : (['workspace', 'handoff', 'assembly', 'url'] as const);
+    for (const field of required) {
         if (typeof config[field] !== 'string' || !config[field]) {
             throw new Error(`Missing workload ${field}.`);
         }
@@ -64,9 +68,28 @@ export function parseDebuggerWorkload(value: unknown): DebuggerWorkload {
             throw new Error(`Workload ${field} must stay within prototype staging.`);
         }
     }
-    const url = new URL(config.url!);
-    if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(url.hostname)) {
-        throw new Error('Debugger workload must use an owned loopback HTTP server.');
+    if (config.id === 'ios') {
+        const launch = config.launch;
+        if (
+            !launch ||
+            launch.type !== 'maui' ||
+            typeof launch.project !== 'string' ||
+            path.isAbsolute(launch.project) ||
+            launch.project.split(/[\\/]/).includes('..') ||
+            typeof launch.configuration !== 'string' ||
+            typeof launch.targetFramework !== 'string' ||
+            !launch.targetFramework.endsWith('-ios')
+        ) {
+            throw new Error('The iOS workload requires a staged-relative .NET MAUI launch for an -ios target framework.');
+        }
+        if (config.url !== undefined || config.server !== undefined || config.entry !== undefined) {
+            throw new Error('The iOS workload has no browser URL, owned server or DOM entry.');
+        }
+    } else {
+        const url = new URL(config.url!);
+        if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(url.hostname)) {
+            throw new Error('Debugger workload must use an owned loopback HTTP server.');
+        }
     }
     if (!Array.isArray(config.stops) || config.stops.length < 2 || config.stops.length > 5) {
         throw new Error('Configure two to five existing synchronous sequence-point stops.');

@@ -1,0 +1,10 @@
+{
+    "name": "ios-coreclr-debugger-prototype-harness",
+    "displayName": "iOS CoreCLR debugger prototype harness (test host only)",
+    "publisher": "prototype",
+    "version": "0.0.1",
+    "private": true,
+    "engines": { "vscode": "^1.95.0" },
+    "activationEvents": [],
+    "contributes": {}
+}

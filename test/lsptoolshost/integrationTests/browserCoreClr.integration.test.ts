@@ -273,7 +273,7 @@ testPrototype('The selected browser workload attaches and completes its requeste
                     [
                         path.join(prototypeDirectory, 'navigateWorkloadHistory.js'),
                         ownerBrowserWs,
-                        workload.url,
+                        workload.url!,
                         new URL(workload.entry.expectedHrefSuffix!, workload.url).href,
                         path.join(run, 'ordinary-history-navigation.json'),
                     ],
