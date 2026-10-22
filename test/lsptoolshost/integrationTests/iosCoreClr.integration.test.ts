@@ -12,6 +12,8 @@ import { expect, test } from '@jest/globals';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { assertRunnableWorkload, parseDebuggerWorkload } from './debuggerWorkload';
 import { measureAutomaticDebuggerSteps, TimedDebuggerRequest } from './automaticDebuggerSteps';
 
@@ -94,6 +96,65 @@ testIos(
         let stepCapabilitiesCheckPassed = false;
         let automaticSteps: Awaited<ReturnType<typeof measureAutomaticDebuggerSteps>> | undefined;
         let managedSessionId: string | undefined;
+        let loadedImages: unknown;
+        // Untimed capability runs only: timestamp the app's [cDAC]/CORDBG stderr lines as mlaunch relays them.
+        const appStderrEvents: { at: number; line: string }[] = [];
+        let stderrTail: ReturnType<typeof setInterval> | undefined;
+        if (process.env.IOS_PROTOTYPE_TAIL_APP_STDERR === '1' && process.env.IOS_PROTOTYPE_PROFILE) {
+            const offsets = new Map<string, number>();
+            const partial = new Map<string, string>();
+            const logs = path.join(process.env.IOS_PROTOTYPE_PROFILE, 'logs');
+            const findMlaunchLogs = (directory: string): string[] =>
+                !fs.existsSync(directory)
+                    ? []
+                    : fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+                          const file = path.join(directory, entry.name);
+                          return entry.isDirectory() ? findMlaunchLogs(file) : /^mlaunch-.*\.log$/.test(entry.name) ? [file] : [];
+                      });
+            stderrTail = setInterval(() => {
+                for (const file of findMlaunchLogs(logs)) {
+                    const size = fs.statSync(file).size;
+                    const from = offsets.get(file) ?? 0;
+                    if (size <= from) {
+                        continue;
+                    }
+                    const fd = fs.openSync(file, 'r');
+                    const buffer = Buffer.alloc(size - from);
+                    fs.readSync(fd, buffer, 0, buffer.length, from);
+                    fs.closeSync(fd);
+                    offsets.set(file, size);
+                    const text = (partial.get(file) ?? '') + buffer.toString('utf8');
+                    const lines = text.split('\n');
+                    partial.set(file, lines.pop() ?? '');
+                    const at = performance.now();
+                    for (const line of lines) {
+                        if (/\[cDAC\]|CORDBG|cdac/i.test(line)) {
+                            appStderrEvents.push({ at, line });
+                        }
+                    }
+                }
+            }, 50);
+        }
+        const appEnvironment: Record<string, string> = JSON.parse(process.env.IOS_PROTOTYPE_APP_ENV ?? '{}');
+        const captureAppImages = async () => {
+            const run = async (file: string, args: string[]) =>
+                (await promisify(execFile)(file, args, { timeout: 20000, maxBuffer: 16 * 1024 * 1024 })).stdout;
+            try {
+                const pids = (await run('/usr/bin/pgrep', ['-f', 'IosDebuggee.app/IosDebuggee'])).trim().split(/\s+/);
+                const result: Record<string, string[]> = {};
+                for (const pid of pids.filter(Boolean)) {
+                    const lsof = await run('/usr/sbin/lsof', ['-p', pid, '-Fn']);
+                    result[pid] = lsof
+                        .split('\n')
+                        .filter((l) => l.startsWith('n') && /\.dylib$/.test(l))
+                        .map((l) => l.slice(1))
+                        .filter((l) => /mscordaccore|mscordbi|coreclr|vsdbgremote/.test(l));
+                }
+                return { capturedAfterMeasuredActions: true, processes: result };
+            } catch (error) {
+                return { captureFailure: String(error) };
+            }
+        };
 
         // Passive observer: records each configuration-resolution stage; returns every configuration unchanged.
         const resolutions: { stage: string; type: unknown; at: number; keys: string[]; coreClrMobileDebuggerOptions?: unknown; program?: unknown }[] = [];
@@ -275,6 +336,10 @@ testIos(
                 platform: 'ios',
                 device: process.env.IOS_PROTOTYPE_DEVICE,
                 preLaunchTask: 'maui: Build',
+                // The MAUI provider passes these to the app as mlaunch --setenv (SIMCTL_CHILD_*).
+                ...(Object.keys(appEnvironment).length
+                    ? { environmentVariables: Object.entries(appEnvironment).map(([k, v]) => `${k}=${v}`).join('\n') }
+                    : {}),
             };
             fs.writeFileSync(path.join(run, 'maui-launch-configuration.json'), JSON.stringify(launch, null, 2));
             launchStartedAt = performance.now();
@@ -328,6 +393,8 @@ testIos(
                         { launchStartedAt, epochOffsetMs }
                     );
                     stepCapabilitiesCheckPassed = true;
+                    // After all measured actions: record which images the app process has loaded (untimed evidence).
+                    loadedImages = await captureAppImages();
                     return;
                 }
                 await new Promise((resolve) => setTimeout(resolve, 25));
@@ -347,6 +414,13 @@ testIos(
                         runId: process.env.WASM_PROTOTYPE_RUN_ID,
                         workload,
                         validationMode: 'ios-maui-f5-automatic-ui',
+                        appEnvironment,
+                        appStderrEvents: appStderrEvents.map((e) => ({
+                            ...e,
+                            atMs: launchStartedAt === undefined ? undefined : e.at - launchStartedAt,
+                        })),
+                        appStderrTimestamped: process.env.IOS_PROTOTYPE_TAIL_APP_STDERR === '1',
+                        loadedImages: loadedImages ?? (failure ? await captureAppImages() : undefined),
                         stepCapabilitiesCheckPassed,
                         userBreakObserved: stopTimes.length > 0,
                         failure,
@@ -392,6 +466,9 @@ testIos(
                     2
                 )
             );
+            if (stderrTail) {
+                clearInterval(stderrTail);
+            }
             await vscode.debug.stopDebugging();
             disposables.forEach((disposable) => disposable.dispose());
         }
