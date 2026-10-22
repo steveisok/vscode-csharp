@@ -136,6 +136,7 @@ testIos(
             }, 50);
         }
         const appEnvironment: Record<string, string> = JSON.parse(process.env.IOS_PROTOTYPE_APP_ENV ?? '{}');
+        const diagnosticLaunchOptions: Record<string, unknown> = JSON.parse(process.env.IOS_PROTOTYPE_DIAGNOSTIC_LAUNCH_OPTIONS ?? '{}');
         const captureAppImages = async () => {
             const run = async (file: string, args: string[]) =>
                 (await promisify(execFile)(file, args, { timeout: 20000, maxBuffer: 16 * 1024 * 1024 })).stdout;
@@ -340,6 +341,7 @@ testIos(
                 ...(Object.keys(appEnvironment).length
                     ? { environmentVariables: Object.entries(appEnvironment).map(([k, v]) => `${k}=${v}`).join('\n') }
                     : {}),
+                ...diagnosticLaunchOptions,
             };
             fs.writeFileSync(path.join(run, 'maui-launch-configuration.json'), JSON.stringify(launch, null, 2));
             launchStartedAt = performance.now();

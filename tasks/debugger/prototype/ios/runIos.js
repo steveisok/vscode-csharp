@@ -62,6 +62,12 @@ function loadIosConfig(filename) {
                 throw Error(`Invalid appEnvironment entry ${key}.`);
         }
     }
+    if (config.diagnosticLaunchOptions !== undefined) {
+        // Diagnostic-only extra launch keys (vsdbg logging); never part of a measured cohort.
+        const keys = Object.keys(config.diagnosticLaunchOptions);
+        if (!keys.length || keys.some((k) => k !== 'logging') || !/-diag$/.test(config.cohortLabel ?? ''))
+            throw Error('diagnosticLaunchOptions may only contain "logging" and requires a cohortLabel ending in -diag.');
+    }
     if (!/^[0-9A-F-]{36}$/.test(config.simulator?.udid ?? '')) throw Error('simulator.udid must be an explicit simulator UDID.');
     if (!config.runtimePack?.version || !config.runtimePack?.id) throw Error('runtimePack id/version required.');
     for (const [name, file] of Object.entries(config.executables)) {
@@ -130,6 +136,7 @@ function cohortInventory(config, stage) {
     if (config.appEnvironment && Object.keys(config.appEnvironment).length) {
         inventory.appEnvironment = Object.entries(config.appEnvironment).map(([k, v]) => `${k}=${v}`).sort().join(';');
     }
+    if (config.diagnosticLaunchOptions) inventory.diagnosticLaunchOptions = JSON.stringify(config.diagnosticLaunchOptions);
     if (config.runtimeLocalPatchSha256) inventory.runtimeLocalPatch = config.runtimeLocalPatchSha256;
     return inventory;
 }
@@ -474,6 +481,7 @@ async function runIos(options) {
     const cohort = cohortInventory(config, stage);
     const workloadName = `ios-${config.cohortLabel ?? config.cohort}`;
     const artifactRoot = config.artifactRoot;
+    if (mode === 'steps' && config.diagnosticLaunchOptions) throw Error('diagnosticLaunchOptions are capability-only.');
     if (mode === 'steps' && !R.hasMatchingCapability(artifactRoot, workloadName, cohort, 'darwin-arm64')) {
         throw Error(`Run ios 1 capability first for the exact ${workloadName} cohort in this artifact area.`);
     }
@@ -552,6 +560,7 @@ async function runIos(options) {
                     IOS_PROTOTYPE_PROFILE: profile,
                     IOS_PROTOTYPE_APP_ENV: JSON.stringify(config.appEnvironment ?? {}),
                     IOS_PROTOTYPE_TAIL_APP_STDERR: mode === 'capability' ? '1' : '0',
+                    IOS_PROTOTYPE_DIAGNOSTIC_LAUNCH_OPTIONS: JSON.stringify(config.diagnosticLaunchOptions ?? {}),
                     ...(config.projectSettleMs ? { IOS_PROTOTYPE_PROJECT_SETTLE_MS: String(config.projectSettleMs) } : {}),
                 };
                 const testLaunch = {
